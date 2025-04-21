@@ -1,0 +1,37 @@
+##!/usr/bin/env python3
+
+import shutil
+import pathlib
+import argparse
+import subprocess
+
+def main():
+  parser = argparse.ArgumentParser()
+  parser.add_argument('-r', '--release', action='store_true', help='Make release build')
+  parser.add_argument('-c', '--config', action='store_true', help='Force config step')
+  parser.add_argument('-t', '--target', help='Target to build')
+  args = parser.parse_args()
+
+  build = 'Release' if args.release else 'Debug'
+  cmake = shutil.which('cmake')
+  assert isinstance(cmake, str)
+  
+  build_dir = pathlib.Path('build-dir') / build
+  if not (build_dir / 'build.ninja').exists() or args.config:
+    subprocess.run([
+      cmake, '-S', '.', '-B', build_dir,
+      f'-DCMAKE_BUILD_TYPE={build}',
+      '-DCMAKE_C_COMPILER=clang',
+      '-DCMAKE_CXX_COMPILER=clang++',
+      '-DCMAKE_EXPORT_COMPILE_COMMANDS=YES',
+      '-G', 'Ninja'])
+    shutil.copy(build_dir / 'compile_commands.json', pathlib.Path.cwd())
+
+  command = [cmake, '--build', build_dir, '--config', build]
+  if args.target is not None:
+    command += ['--target', args.target]
+  print(command)
+  subprocess.run(command)
+
+if __name__ == '__main__':
+  main()

@@ -1,0 +1,15 @@
+if(DEFINED ENV{DEPOT_TOOLS})
+  set(DEPOT_TOOLS "$ENV{DEPOT_TOOLS}")
+elseif(WIN32)
+  set(DEPOT_TOOLS "$ENV{USERPROFILE}/depot_tools")
+else()
+  set(DEPOT_TOOLS "$ENV{HOME}/depot_tools")
+endif()
+
+if(WIN32)
+  set(ENV{PATH} "${DEPOT_TOOLS};$ENV{PATH}")
+else()
+  set(ENV{PATH} "${DEPOT_TOOLS}:$ENV{PATH}")
+endif()
+
+execute_process(COMMAND ninja)
