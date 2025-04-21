@@ -66,7 +66,7 @@ elseif(APPLE)
   target_link_libraries(sdl INTERFACE ${CORE_AUDIO} ${CORE_IMAGE} ${CORE_HAPTICS} ${CORE_GRAPHICS} ${FORCE_FEEDBACK}
     ${GAME_CONTROLLER} ${IO_KIT} ${APP_KIT} ${SECURITY} ${OPENGL} ${CARBON} ${METAL})
 else()
-  target_link_libraries(sdl INTERFACE xcb xcb-shm xcb-xfixes xcb-shape)
+  target_link_libraries(sdl INTERFACE xcb xcb-shm xcb-xfixes xcb-shape dl)
 endif()
 target_include_directories(sdl INTERFACE "${SDL_INCLUDE}")
 

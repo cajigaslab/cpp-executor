@@ -12,4 +12,4 @@ else()
   set(ENV{PATH} "${DEPOT_TOOLS}:$ENV{PATH}")
 endif()
 
-execute_process(COMMAND ninja)
+execute_process(COMMAND ninja skia)

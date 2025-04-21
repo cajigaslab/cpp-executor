@@ -54,6 +54,11 @@ if(NOT WIN32 AND NOT APPLE)
   list(APPEND ALL_LINK_OPTIONS ${LIBCXX_LINK_OPTIONS})
 endif()
 
+add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:${ALL_COMPILE_OPTIONS}>")
+add_link_options("$<$<COMPILE_LANGUAGE:CXX>:${ALL_LINK_OPTIONS}>")
+string(REPLACE ";" " " ALL_COMPILE_OPTIONS_SPACED "${ALL_COMPILE_OPTIONS}")
+string(REPLACE ";" " " ALL_LINK_OPTIONS_SPACED "${ALL_LINK_OPTIONS}")
+
 find_package(Python COMPONENTS Interpreter)
 include(cmake/grpc.cmake)
 include(cmake/perfetto.cmake)

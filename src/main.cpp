@@ -43,13 +43,10 @@
 //#pragma clang diagnostic pop
 //#endif
 
+#ifdef _WIN32
 #define NOMINMAX
 #include <windows.h>
-#include <gl/GL.h>
-#define GL_FRAMEBUFFER_BINDING 0x8CA6
-#define GL_RGB8 0x8051
-#define GL_COLOR_BUFFER_BIT 0x00004000
-#define GL_STENCIL_BUFFER_BIT 0x00000400
+#endif
 
 using namespace std::chrono_literals;
 
@@ -127,7 +124,7 @@ struct Window {
 
     GrGLFramebufferInfo info;
     info.fFBOID = 0;
-    info.fFormat = GL_RGB8;
+    info.fFormat = GR_GL_RGB8;
 
     GrBackendRenderTarget target = GrBackendRenderTargets::MakeGL(width, height, 0, 8, info);
 
@@ -140,7 +137,7 @@ struct Window {
     if (buffer >= 0) {
       GrGLFramebufferInfo info;
       info.fFBOID = (GrGLuint)buffer;
-      info.fFormat = GL_RGB8;
+      info.fFormat = GR_GL_RGB8;
 
       GrBackendRenderTarget target = GrBackendRenderTargets::MakeGL(256, 256, 0, 8, info);
 
@@ -160,7 +157,7 @@ void gl_example(int width, int height, void (*draw)(SkCanvas*), const char* path
 
   auto& io = ImGui::GetIO();
 
-  Window main_window(mainwindow, maincontext);
+  Window main_window{mainwindow, maincontext};
   Window& operator_window = main_window;
   //Window operator_window(operatorwindow, operatorcontext);
   std::vector<double> scales(8);
@@ -185,16 +182,16 @@ void gl_example(int width, int height, void (*draw)(SkCanvas*), const char* path
   glerr = operator_window.gl_face->fFunctions.fGetError();
 
   // Give an empty image to OpenGL ( the last "0" )
-  operator_window.gl_face->fFunctions.fTexImage2D(GR_GL_TEXTURE_2D, 0, GL_RGB, 256, 256, 0, GL_RGB, GL_UNSIGNED_BYTE, 0);
+  operator_window.gl_face->fFunctions.fTexImage2D(GR_GL_TEXTURE_2D, 0, GR_GL_RGB, 256, 256, 0, GR_GL_RGB, GR_GL_UNSIGNED_BYTE, 0);
   glerr = operator_window.gl_face->fFunctions.fGetError();
 
   // Poor filtering. Needed !
   operator_window.gl_face->fFunctions.fTexParameteri(GR_GL_TEXTURE_2D, GR_GL_TEXTURE_MAG_FILTER, GR_GL_NEAREST);
   glerr = operator_window.gl_face->fFunctions.fGetError();
-  operator_window.gl_face->fFunctions.fTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  operator_window.gl_face->fFunctions.fTexParameteri(GR_GL_TEXTURE_2D, GR_GL_TEXTURE_MIN_FILTER, GR_GL_NEAREST);
   glerr = operator_window.gl_face->fFunctions.fGetError();
 
-  operator_window.gl_face->fFunctions.fFramebufferTexture2D(GR_GL_FRAMEBUFFER, GR_GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, renderedTexture, 0);
+  operator_window.gl_face->fFunctions.fFramebufferTexture2D(GR_GL_FRAMEBUFFER, GR_GL_COLOR_ATTACHMENT0, GR_GL_TEXTURE_2D, renderedTexture, 0);
   glerr = operator_window.gl_face->fFunctions.fGetError();
   GrGLenum DrawBuffers[1] = { GR_GL_COLOR_ATTACHMENT0 };
   operator_window.gl_face->fFunctions.fDrawBuffers(1, DrawBuffers); // "1" is the size of DrawBuffers
