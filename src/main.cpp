@@ -104,6 +104,22 @@ struct Window {
   SkCanvas* fb_gpuCanvas = nullptr;
   SkSurfaceProps fb_props;
 
+  void clean() {
+    if (surface) {
+      surface.reset();
+    }
+    if (context) {
+      context->abandonContext();
+      context.reset();
+    }
+    if (gl_face) {
+      gl_face.reset();
+    }
+    if (fb_surface) {
+      fb_surface.reset();
+    }
+  }
+
   void rebuild(int width, int height, int buffer = -1) {
     this->width = width;
     this->height = height;
@@ -230,6 +246,12 @@ public:
   bool sending = false;
   task_controller_grpc::TaskResult sending_task_result;
   grpc::ClientContext context;
+  bool done = false;
+  ~ExecutionReactor() {
+    grpc::ClientBidiReactor<task_controller_grpc::TaskResult, task_controller_grpc::TaskConfig>::StartWritesDone();
+    std::unique_lock<std::mutex> lock(mutex);
+    condition.wait(lock, [&] { return done; });
+  }
   void start() {
     grpc::ClientBidiReactor<task_controller_grpc::TaskResult, task_controller_grpc::TaskConfig>::StartRead(&received_task_config);
     grpc::ClientBidiReactor<task_controller_grpc::TaskResult, task_controller_grpc::TaskConfig>::StartCall();
@@ -240,14 +262,24 @@ public:
     }
     std::lock_guard<std::mutex> lock(mutex);
     available_task_config = received_task_config;
+    grpc::ClientBidiReactor<task_controller_grpc::TaskResult, task_controller_grpc::TaskConfig>::StartRead(&received_task_config);
   }
   void OnWriteDone(bool ok) override {
+    std::cout << "wrote " << ok << std::endl;
     if(!ok) {
       return;
     }
     {
       std::lock_guard<std::mutex> lock(mutex);
       sending = false;
+    }
+    condition.notify_all();
+  }
+  void OnDone(const grpc::Status& status) override {
+    std::cout << "OnDone" << std::endl;
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      done = true;
     }
     condition.notify_all();
   }
@@ -258,9 +290,13 @@ public:
     return result;
   }
   void send_task_result(const task_controller_grpc::TaskResult& result) {
+    std::cout << "1" << std::endl;
     std::unique_lock<std::mutex> lock(mutex);
+    std::cout << "2" << std::endl;
     condition.wait(lock, [&] { return !sending; });
+    std::cout << "3" << std::endl;
     sending_task_result = result;
+    grpc::ClientBidiReactor<task_controller_grpc::TaskResult, task_controller_grpc::TaskConfig>::StartWrite(&sending_task_result);
     sending = true;
   }
 };
@@ -269,14 +305,14 @@ void gl_example(int width, int height, void (*draw)(SkCanvas*), const char* path
 	std::cout << 1 << std::endl;
 	std::cout << 2 << std::endl;
 	std::cout << 3 << std::endl;
-  ExecutionReactor reactor;
-  stub.async()->execution(&reactor.context, &reactor);
-  reactor.start();
 
   auto& io = ImGui::GetIO();
 
   Window main_window{mainwindow, maincontext};
   //Window& operator_window = main_window;
+  ExecutionReactor reactor;
+  stub.async()->execution(&reactor.context, &reactor);
+  reactor.start();
   Window operator_window(operatorwindow, operatorcontext);
   std::vector<double> scales(8);
   std::string a;
@@ -352,13 +388,23 @@ void gl_example(int width, int height, void (*draw)(SkCanvas*), const char* path
 	SDL_Event event;
 	bool running = true;
 	first_start = std::chrono::steady_clock::now();
+  auto task_start = 0ns;
 	while (running) {
   	auto start = std::chrono::steady_clock::now();
   	auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
     auto task_config = reactor.receive_task_config();
     if(task_config.has_value()) {
-      //...
+      std::cout << task_config->body() << std::endl;
+      task_start = start.time_since_epoch();
     }
+    if(task_start != 0ns && start.time_since_epoch() - task_start > 1s) {
+      std::cout << "Respond" << std::endl;
+      task_controller_grpc::TaskResult result;
+      result.set_success(true);
+      reactor.send_task_result(result);
+      task_start = 0ns;
+    }
+
   	while (running && elapsed < 16ms) {
     	if (SDL_WaitEventTimeout(&event, 16 - elapsed.count())) {
         ImGui_ImplSDL3_ProcessEvent(&event);
@@ -434,6 +480,9 @@ void gl_example(int width, int height, void (*draw)(SkCanvas*), const char* path
 	//SkFILEWStream out(path);
 	//(void)out.write(png->data(), png->size());
   success = SDL_GL_MakeCurrent(operatorwindow, operatorcontext);
+  operator_window.clean();
+  success = SDL_GL_MakeCurrent(mainwindow, maincontext);
+  main_window.clean();
 }
 
 int main(int argc, char* argv[]) {
