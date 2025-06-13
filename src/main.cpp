@@ -139,7 +139,7 @@ struct Window {
       info.fFBOID = (GrGLuint)buffer;
       info.fFormat = GR_GL_RGB8;
 
-      GrBackendRenderTarget target = GrBackendRenderTargets::MakeGL(256, 256, 0, 8, info);
+      GrBackendRenderTarget target = GrBackendRenderTargets::MakeGL(width, height, 0, 8, info);
 
       fb_surface = SkSurfaces::WrapBackendRenderTarget(context.get(), target,
         kBottomLeft_GrSurfaceOrigin,
@@ -150,6 +150,78 @@ struct Window {
    }
 };
 
+struct FrameBuffer {
+  const GrGLInterface::Functions* fFunctions = nullptr;
+  GrGLuint buffer = 0;
+  GrGLuint texture = 0;
+  FrameBuffer(const FrameBuffer&) = delete;
+  FrameBuffer(FrameBuffer&& other) {
+    fFunctions = other.fFunctions;
+    take(std::move(other));
+  }
+  FrameBuffer& operator=(FrameBuffer&& other) {
+    fFunctions = other.fFunctions;
+    clear();
+    take(std::move(other));
+    return *this;
+  }
+  FrameBuffer(const GrGLInterface::Functions* fFunctions, int width, int height)
+    : fFunctions(fFunctions) {
+    auto glerr = fFunctions->fGetError();
+    fFunctions->fGenFramebuffers(1, &buffer);
+    glerr = fFunctions->fGetError();
+    fFunctions->fBindFramebuffer(GR_GL_FRAMEBUFFER, buffer);
+    glerr = fFunctions->fGetError();
+    // The texture we're going to render to
+    fFunctions->fGenTextures(1, &texture);
+    glerr = fFunctions->fGetError();
+
+    // "Bind" the newly created texture : all future texture functions will modify this texture
+    fFunctions->fBindTexture(GR_GL_TEXTURE_2D, texture);
+    glerr = fFunctions->fGetError();
+
+    // Give an empty image to OpenGL ( the last "0" )
+    fFunctions->fTexImage2D(GR_GL_TEXTURE_2D, 0, GR_GL_RGB, width, height, 0, GR_GL_RGB, GR_GL_UNSIGNED_BYTE, 0);
+    glerr = fFunctions->fGetError();
+
+    // Poor filtering. Needed !
+    fFunctions->fTexParameteri(GR_GL_TEXTURE_2D, GR_GL_TEXTURE_MAG_FILTER, GR_GL_NEAREST);
+    glerr = fFunctions->fGetError();
+    fFunctions->fTexParameteri(GR_GL_TEXTURE_2D, GR_GL_TEXTURE_MIN_FILTER, GR_GL_NEAREST);
+    glerr = fFunctions->fGetError();
+
+    fFunctions->fFramebufferTexture2D(GR_GL_FRAMEBUFFER, GR_GL_COLOR_ATTACHMENT0, GR_GL_TEXTURE_2D, texture, 0);
+    glerr = fFunctions->fGetError();
+    GrGLenum DrawBuffers[1] = { GR_GL_COLOR_ATTACHMENT0 };
+    fFunctions->fDrawBuffers(1, DrawBuffers); // "1" is the size of DrawBuffers
+    glerr = fFunctions->fGetError();
+    auto buffer_status = fFunctions->fCheckFramebufferStatus(GR_GL_FRAMEBUFFER);
+    glerr = fFunctions->fGetError();
+  }
+
+  void clear() {
+    if (texture) {
+      fFunctions->fDeleteTextures(1, &texture);
+      texture = 0;
+    }
+    if (buffer) {
+      fFunctions->fDeleteFramebuffers(1, &buffer);
+      buffer = 0;
+    }
+  }
+
+  void take(FrameBuffer&& other) {
+    std::swap(buffer, other.buffer);
+    std::swap(texture, other.texture);
+  }
+
+
+  ~FrameBuffer() {
+    clear();
+  }
+};
+
+
 void gl_example(int width, int height, void (*draw)(SkCanvas*), const char* path) {
 	std::cout << 1 << std::endl;
 	std::cout << 2 << std::endl;
@@ -158,60 +230,29 @@ void gl_example(int width, int height, void (*draw)(SkCanvas*), const char* path
   auto& io = ImGui::GetIO();
 
   Window main_window{mainwindow, maincontext};
-  Window& operator_window = main_window;
-  //Window operator_window(operatorwindow, operatorcontext);
+  //Window& operator_window = main_window;
+  Window operator_window(operatorwindow, operatorcontext);
   std::vector<double> scales(8);
   std::string a;
   main_window.rebuild(width, height);
-  //operator_window.rebuild(width / 2, height / 2);
+  operator_window.rebuild(width, height);
 
   bool success = SDL_GL_MakeCurrent(operatorwindow, operatorcontext);
-  GrGLuint FramebufferName = 0;
-  auto glerr = operator_window.gl_face->fFunctions.fGetError();
-  operator_window.gl_face->fFunctions.fGenFramebuffers(1, &FramebufferName);
-  glerr = operator_window.gl_face->fFunctions.fGetError();
-  operator_window.gl_face->fFunctions.fBindFramebuffer(GR_GL_FRAMEBUFFER, FramebufferName);
-  glerr = operator_window.gl_face->fFunctions.fGetError();
-  // The texture we're going to render to
-  GrGLuint renderedTexture;
-  operator_window.gl_face->fFunctions.fGenTextures(1, &renderedTexture);
-  glerr = operator_window.gl_face->fFunctions.fGetError();
-
-  // "Bind" the newly created texture : all future texture functions will modify this texture
-  operator_window.gl_face->fFunctions.fBindTexture(GR_GL_TEXTURE_2D, renderedTexture);
-  glerr = operator_window.gl_face->fFunctions.fGetError();
-
-  // Give an empty image to OpenGL ( the last "0" )
-  operator_window.gl_face->fFunctions.fTexImage2D(GR_GL_TEXTURE_2D, 0, GR_GL_RGB, 256, 256, 0, GR_GL_RGB, GR_GL_UNSIGNED_BYTE, 0);
-  glerr = operator_window.gl_face->fFunctions.fGetError();
-
-  // Poor filtering. Needed !
-  operator_window.gl_face->fFunctions.fTexParameteri(GR_GL_TEXTURE_2D, GR_GL_TEXTURE_MAG_FILTER, GR_GL_NEAREST);
-  glerr = operator_window.gl_face->fFunctions.fGetError();
-  operator_window.gl_face->fFunctions.fTexParameteri(GR_GL_TEXTURE_2D, GR_GL_TEXTURE_MIN_FILTER, GR_GL_NEAREST);
-  glerr = operator_window.gl_face->fFunctions.fGetError();
-
-  operator_window.gl_face->fFunctions.fFramebufferTexture2D(GR_GL_FRAMEBUFFER, GR_GL_COLOR_ATTACHMENT0, GR_GL_TEXTURE_2D, renderedTexture, 0);
-  glerr = operator_window.gl_face->fFunctions.fGetError();
-  GrGLenum DrawBuffers[1] = { GR_GL_COLOR_ATTACHMENT0 };
-  operator_window.gl_face->fFunctions.fDrawBuffers(1, DrawBuffers); // "1" is the size of DrawBuffers
-  glerr = operator_window.gl_face->fFunctions.fGetError();
-  auto buffer_status = operator_window.gl_face->fFunctions.fCheckFramebufferStatus(GR_GL_FRAMEBUFFER);
-  glerr = operator_window.gl_face->fFunctions.fGetError();
-
-  main_window.rebuild(width, height, FramebufferName);
+  FrameBuffer frameBuffer(&operator_window.gl_face->fFunctions, 512, 512);
+  operator_window.rebuild(width, height, frameBuffer.buffer);
+  frameBuffer.fFunctions = &operator_window.gl_face->fFunctions;
 
   auto draw_ui = [&] {
     bool success = SDL_GL_MakeCurrent(operatorwindow, operatorcontext);
 
-    operator_window.gl_face->fFunctions.fBindFramebuffer(GR_GL_FRAMEBUFFER, FramebufferName);
+    operator_window.gl_face->fFunctions.fBindFramebuffer(GR_GL_FRAMEBUFFER, frameBuffer.buffer);
     auto glerr = operator_window.gl_face->fFunctions.fGetError();
-    auto scale = std::min(256.0 / main_window.width, 256.0 / main_window.height);
-    operator_window.gl_face->fFunctions.fViewport(0, 0, operator_window.width*scale, operator_window.height * scale);
+    auto scale = std::min(256.0/main_window.width, 256.0 / main_window.height);
+    operator_window.gl_face->fFunctions.fViewport(0, 0, main_window.width, main_window.height);
     glerr = operator_window.gl_face->fFunctions.fGetError();
 
     operator_window.fb_gpuCanvas->resetMatrix();
-    operator_window.fb_gpuCanvas->scale(scale, scale);
+    //operator_window.fb_gpuCanvas->scale(scale, scale);
     draw(operator_window.fb_gpuCanvas);
     operator_window.context->flush();
     operator_window.gl_face->fFunctions.fBindFramebuffer(GR_GL_FRAMEBUFFER, 0);
@@ -223,8 +264,11 @@ void gl_example(int width, int height, void (*draw)(SkCanvas*), const char* path
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
 
-    ImGui::Begin("Operator View");                          // Create a window called "Hello, world!" and append into it.
-    ImGui::Image(renderedTexture, ImVec2(256, 256), ImVec2(0, 1), ImVec2(1, 0));
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+
+    ImGui::Begin("Operator View", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoResize);                          // Create a window called "Hello, world!" and append into it.
+    ImGui::Image(frameBuffer.texture, ImVec2(main_window.width* scale, main_window.height * scale), ImVec2(0, 1), ImVec2(1, 0));
     if (ImGui::BeginTable("split", 4))
     {
       
@@ -255,22 +299,12 @@ void gl_example(int width, int height, void (*draw)(SkCanvas*), const char* path
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
-    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
-    {
-      SDL_Window* backup_current_window = SDL_GL_GetCurrentWindow();
-      SDL_GLContext backup_current_context = SDL_GL_GetCurrentContext();
-      ImGui::UpdatePlatformWindows();
-      ImGui::RenderPlatformWindowsDefault();
-      SDL_GL_MakeCurrent(backup_current_window, backup_current_context);
-    }
-
     SDL_GL_SwapWindow(operatorwindow);
   };
 
 	std::cout << 1 << std::endl;
 	SDL_Event event;
 	bool running = true;
-	//gl_face->fFunctions.fViewport(0, 0, 512, 512);
 	first_start = std::chrono::steady_clock::now();
 	while (running) {
   	auto start = std::chrono::steady_clock::now();
@@ -278,16 +312,20 @@ void gl_example(int width, int height, void (*draw)(SkCanvas*), const char* path
   	while (running && elapsed < 16ms) {
     	if (SDL_WaitEventTimeout(&event, 16 - elapsed.count())) {
         ImGui_ImplSDL3_ProcessEvent(&event);
-        //draw_ui();
 
       	switch (event.type) {
         case SDL_EVENT_WINDOW_RESIZED:
           if (event.window.windowID == SDL_GetWindowID(mainwindow)) {
-            main_window.rebuild(event.window.data1, event.window.data2, FramebufferName);
+            main_window.rebuild(event.window.data1, event.window.data2);
+            bool success = SDL_GL_MakeCurrent(operatorwindow, operatorcontext);
+            std::cout << "Remake buffer" << std::endl;
+            frameBuffer = FrameBuffer(&operator_window.gl_face->fFunctions, event.window.data1, event.window.data2);
+            operator_window.rebuild(event.window.data1, event.window.data2, frameBuffer.buffer);
+            frameBuffer.fFunctions = &operator_window.gl_face->fFunctions;
           }
-          else if (event.window.windowID == SDL_GetWindowID(operatorwindow)) {
-            operator_window.rebuild(event.window.data1, event.window.data2, FramebufferName);
-          }
+          //else if (event.window.windowID == SDL_GetWindowID(operatorwindow)) {
+          //  operator_window.rebuild(event.window.data1, event.window.data2, FramebufferName);
+          //}
           break;
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
       	case SDL_EVENT_QUIT:
@@ -323,7 +361,8 @@ void gl_example(int width, int height, void (*draw)(SkCanvas*), const char* path
     main_window.gpuCanvas->resetMatrix();
     draw(main_window.gpuCanvas);
 
-    //SDL_GL_SwapWindow(mainwindow);
+    main_window.context->flush();
+    SDL_GL_SwapWindow(mainwindow);
 
     draw_ui();
     //success = SDL_GL_MakeCurrent(operatorwindow, operatorcontext);
@@ -344,6 +383,7 @@ void gl_example(int width, int height, void (*draw)(SkCanvas*), const char* path
 	//if (!png) { return; }
 	//SkFILEWStream out(path);
 	//(void)out.write(png->data(), png->size());
+  success = SDL_GL_MakeCurrent(operatorwindow, operatorcontext);
 }
 
 int main(int argc, char* argv[]) {
@@ -388,15 +428,15 @@ int main(int argc, char* argv[]) {
   }
   std::cout << 104 << std::endl;
 
-  //operatorwindow = SDL_CreateWindow("OPERATOR",
-  //  256, 256, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
-  //std::cout << 103 << std::endl;
-  //if (!operatorwindow) /* Die if creation failed */ {
-  //  std::cout << "Unable to create window" << std::endl;
-  //  std::terminate();
-  //  return 1;
-  //}
-  //std::cout << 104 << std::endl;
+  operatorwindow = SDL_CreateWindow("OPERATOR",
+    384, 384, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
+  std::cout << 103 << std::endl;
+  if (!operatorwindow) /* Die if creation failed */ {
+    std::cout << "Unable to create window" << std::endl;
+    std::terminate();
+    return 1;
+  }
+  std::cout << 104 << std::endl;
 
   /* Create our opengl context and attach it to our window */
   maincontext = SDL_GL_CreateContext(mainwindow);
@@ -408,25 +448,24 @@ int main(int argc, char* argv[]) {
     std::terminate();
     return 1;
   }
-  operatorwindow = mainwindow;
-  operatorcontext = maincontext;
+  //operatorwindow = mainwindow;
+  //operatorcontext = maincontext;
 
   /* Create our opengl context and attach it to our window */
-  //operatorcontext = SDL_GL_CreateContext(operatorwindow);
-  //std::cout << 105 << std::endl;
-  //success = SDL_GL_MakeCurrent(operatorwindow, operatorcontext);
-  //if (!success) /* Die if creation failed */ {
-  //  auto error = SDL_GetError();
-  //  std::cout << "SDL_GL_MakeCurrent failed: " << error << std::endl;
-  //  std::terminate();
-  //  return 1;
-  //}
+  operatorcontext = SDL_GL_CreateContext(operatorwindow);
+  std::cout << 105 << std::endl;
+  success = SDL_GL_MakeCurrent(operatorwindow, operatorcontext);
+  if (!success) /* Die if creation failed */ {
+    auto error = SDL_GetError();
+    std::cout << "SDL_GL_MakeCurrent failed: " << error << std::endl;
+    std::terminate();
+    return 1;
+  }
 
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
   auto& io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
-  io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
 
   ImGui::StyleColorsDark();
 
@@ -453,8 +492,8 @@ int main(int argc, char* argv[]) {
 
   SDL_GL_DestroyContext(maincontext);
   SDL_DestroyWindow(mainwindow);
-  //SDL_GL_DestroyContext(operatorcontext);
-  //SDL_DestroyWindow(operatorwindow);
+  SDL_GL_DestroyContext(operatorcontext);
+  SDL_DestroyWindow(operatorwindow);
   SDL_Quit();
   std::cout << "Quit" << std::endl;
   return 0;

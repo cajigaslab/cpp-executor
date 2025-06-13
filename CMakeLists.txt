@@ -66,6 +66,7 @@ include(cmake/perfetto.cmake)
 include(cmake/skia.cmake)
 include(cmake/sdl.cmake)
 include(cmake/imgui.cmake)
+include(cmake/lua.cmake)
 
 set(PROTO_SOURCES thalamus.proto task_controller.proto)
 apply_protoc_grpc(PROTO_GENERATED_SOURCES ${PROTO_SOURCES})
