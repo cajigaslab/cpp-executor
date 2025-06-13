@@ -221,11 +221,57 @@ struct FrameBuffer {
   }
 };
 
+class ExecutionReactor : public grpc::ClientBidiReactor<task_controller_grpc::TaskResult, task_controller_grpc::TaskConfig> {
+public:
+  std::mutex mutex;
+  std::condition_variable condition;
+  task_controller_grpc::TaskConfig received_task_config;
+  std::optional<task_controller_grpc::TaskConfig> available_task_config;
+  bool sending = false;
+  task_controller_grpc::TaskResult sending_task_result;
+  grpc::ClientContext context;
+  void start() {
+    grpc::ClientBidiReactor<task_controller_grpc::TaskResult, task_controller_grpc::TaskConfig>::StartRead(&received_task_config);
+    grpc::ClientBidiReactor<task_controller_grpc::TaskResult, task_controller_grpc::TaskConfig>::StartCall();
+  }
+  void OnReadDone(bool ok) override {
+    if(!ok) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(mutex);
+    available_task_config = received_task_config;
+  }
+  void OnWriteDone(bool ok) override {
+    if(!ok) {
+      return;
+    }
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      sending = false;
+    }
+    condition.notify_all();
+  }
+  std::optional<task_controller_grpc::TaskConfig> receive_task_config() {
+    std::lock_guard<std::mutex> lock(mutex);
+    std::optional<task_controller_grpc::TaskConfig> result;
+    std::swap(result, available_task_config);
+    return result;
+  }
+  void send_task_result(const task_controller_grpc::TaskResult& result) {
+    std::unique_lock<std::mutex> lock(mutex);
+    condition.wait(lock, [&] { return !sending; });
+    sending_task_result = result;
+    sending = true;
+  }
+};
 
-void gl_example(int width, int height, void (*draw)(SkCanvas*), const char* path) {
+void gl_example(int width, int height, void (*draw)(SkCanvas*), const char* path, task_controller_grpc::TaskController::Stub& stub) {
 	std::cout << 1 << std::endl;
 	std::cout << 2 << std::endl;
 	std::cout << 3 << std::endl;
+  ExecutionReactor reactor;
+  stub.async()->execution(&reactor.context, &reactor);
+  reactor.start();
 
   auto& io = ImGui::GetIO();
 
@@ -309,6 +355,10 @@ void gl_example(int width, int height, void (*draw)(SkCanvas*), const char* path
 	while (running) {
   	auto start = std::chrono::steady_clock::now();
   	auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
+    auto task_config = reactor.receive_task_config();
+    if(task_config.has_value()) {
+      //...
+    }
   	while (running && elapsed < 16ms) {
     	if (SDL_WaitEventTimeout(&event, 16 - elapsed.count())) {
         ImGui_ImplSDL3_ProcessEvent(&event);
@@ -484,7 +534,7 @@ int main(int argc, char* argv[]) {
     auto thalamus_stub = thalamus_grpc::Thalamus::NewStub(thalamus_channel);
     auto task_controller_stub = task_controller_grpc::TaskController::NewStub(task_controller_channel);
 
-    gl_example(512, 512, draw, "skia.png");
+    gl_example(512, 512, draw, "skia.png", *task_controller_stub);
   }
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplSDL3_Shutdown();
