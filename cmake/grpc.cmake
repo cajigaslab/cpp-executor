@@ -20,6 +20,15 @@ FetchContent_MakeAvailable(gRPC)
 
 #target_compile_options(crypto PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:-w>")
 
+add_library(jsoncpp 
+  "${grpc_SOURCE_DIR}/third_party/protobuf/third_party/jsoncpp/src/lib_json/json_reader.cpp"
+  "${grpc_SOURCE_DIR}/third_party/protobuf/third_party/jsoncpp/src/lib_json/json_tool.h"
+  "${grpc_SOURCE_DIR}/third_party/protobuf/third_party/jsoncpp/src/lib_json/json_value.cpp"
+  "${grpc_SOURCE_DIR}/third_party/protobuf/third_party/jsoncpp/src/lib_json/json_writer.cpp")
+target_include_directories(jsoncpp PUBLIC 
+  "${grpc_SOURCE_DIR}/third_party/protobuf/third_party/jsoncpp/include")
+target_compile_definitions(jsoncpp PUBLIC JSON_USE_EXCEPTION=0 JSON_HAS_INT64)
+
 macro(apply_protoc_grpc OUTPUT_SOURCES)
   
   foreach(PROTO_FILE ${ARGN})

@@ -80,11 +80,36 @@ set(WARNING_FLAGS
 
 include_directories(${CMAKE_BINARY_DIR})
 
-add_executable(cpp_executor src/main.cpp)
+add_executable(cpp_executor 
+  src/task.cpp
+  src/task.hpp
+  src/simple_task.cpp
+  src/simple_task.hpp
+  src/lua_task.cpp
+  src/lua_task.hpp
+  src/hold_state_machine.cpp
+  src/hold_state_machine.hpp
+  src/lua/rect.cpp
+  src/lua/rect.hpp
+  src/lua/font.cpp
+  src/lua/font.hpp
+  src/lua/paint.cpp
+  src/lua/paint.hpp
+  src/lua/color.cpp
+  src/lua/color.hpp
+  src/lua/fontstyle.cpp
+  src/lua/fontstyle.hpp
+  src/lua/typeface.cpp
+  src/lua/typeface.hpp
+  src/lua/fontmanager.cpp
+  src/lua/fontmanager.hpp
+  src/lua/canvas.cpp
+  src/lua/canvas.hpp
+  src/main.cpp)
 
 if(WIN32)
   target_compile_definitions(cpp_executor PRIVATE _WIN32_WINNT=0x0A00 _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN BOOST_STACKTRACE_USE_WINDBG)
-  target_link_libraries(cpp_executor dbgeng ole32 kernel32 user32 gdi32 winmm imm32 oleaut32 version uuid advapi32 setupapi shell32 dinput8 opengl32)
+  target_link_libraries(cpp_executor dbgeng ole32 kernel32 user32 gdi32 winmm imm32 oleaut32 version uuid advapi32 setupapi shell32 dinput8 opengl32 usp10)
   set_target_properties(cpp_executor PROPERTIES WIN32_EXECUTABLE YES)
 elseif(APPLE)
   target_compile_definitions(cpp_executor PRIVATE _GNU_SOURCE)
@@ -93,7 +118,7 @@ else()
 endif()
 target_compile_options(cpp_executor PRIVATE ${WARNING_FLAGS})
 target_include_directories(cpp_executor PRIVATE src)
-target_link_libraries(cpp_executor sdl skia protoc_generated grpc++ perfetto imgui)
+target_link_libraries(cpp_executor sdl skia protoc_generated grpc++ perfetto imgui jsoncpp lua)
 
 if(NOT "${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
   target_link_options(cpp_executor PRIVATE -g)
