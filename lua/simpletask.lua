@@ -25,12 +25,15 @@ function SimpleTask.new(context)
   local target_width = context:get_uniform_field("target_width");
   local target_height = context:get_uniform_field("target_height");
   local target = Rect.MakeXYWH(target_x, target_y, target_width, target_height);
+  local corner_rect = Rect.MakeXYWH(1720, 880, 200, 200);
   local target_color = context:get_color_field("target_color");
   local target_paint = Paint.new(Color.Color4f.FromColor(target_color))
 
   local result = {
+    context = context,
     state = 'NONE',
     target = target,
+    corner_rect = corner_rect,
     target_paint = target_paint,
     hold = HoldStateMachine.new(hold_timeout, blink_timeout),
     intertrial_timeout = intertrial_timeout,
@@ -46,17 +49,23 @@ function SimpleTask.new(context)
   return result
 end
 
+function SimpleTask:set_state(state)
+  self.start = os.clock()
+  self.state = state
+  self.context.log('BehavState=' .. state)
+end
+
 function SimpleTask:touch(x, y)
   if self.state == 'INTERTRIAL' then
-    self.start = os.clock()
-    self.state = 'FAIL'
+    if 0 <= x and 0 <= y then
+      self:set_state('FAIL')
+    end
   elseif self.state == 'START_ON' then
     if self.target:contains(x, y) then
       self.hold = HoldStateMachine.new(self.hold_timeout, self.blink_timeout)
-      self.state = 'START_ACQ'
-    else
-      self.start = os.clock()
-      self.state = 'FAIL'
+      self:set_state('START_ACQ')
+    elseif 0 <= x and 0 <= y then
+      self:set_state('FAIL')
     end
   elseif self.state == 'START_ACQ' then
     self.hold:acquired(self.target:contains(x, y))
@@ -69,28 +78,23 @@ end
 function SimpleTask:update()
   --print(self.state)
   if self.state == 'NONE' then
-    self.start = os.clock()
-    self.state = 'INTERTRIAL'
+    self:set_state('INTERTRIAL')
   elseif self.state == 'INTERTRIAL' then
     local now = os.clock()
     if now - self.start > self.intertrial_timeout then
-      self.start = os.clock()
-      self.state = 'START_ON'
+      self:set_state('START_ON')
     end
   elseif self.state == 'START_ON' then
     local now = os.clock()
     if now - self.start > self.start_timeout then
-      self.start = os.clock()
-      self.state = 'INTERTRIAL'
+      self:set_state('INTERTRIAL')
     end
   elseif self.state == 'START_ACQ' then
     local status = self.hold:update()
     if status == 'SUCCESS' then
-      self.start = os.clock()
-      self.state = 'SUCCESS'
+      self:set_state('SUCCESS')
     elseif status == 'FAIL' then
-      self.start = os.clock()
-      self.state = 'FAIL'
+      self:set_state('FAIL')
     end
   elseif self.state == 'SUCCESS' then
     local now = os.clock()
@@ -108,6 +112,9 @@ end
 function SimpleTask:draw(canvas, view)
   if self.state == 'START_ON' or self.state == 'START_ACQ' then
     canvas:drawRect(self.target, self.target_paint);
+  end
+  if self.state == 'START_ON' then
+    canvas:drawRect(self.corner_rect, self.target_paint);
   end
   if view == 'OPERATOR' then
     local now = os.clock()

@@ -25,7 +25,8 @@ end
 
 function Context.new(config)
   local result = {
-    config = config
+    config = config,
+    log = thalamus_log
   }
   print('meta')
   print(Context)

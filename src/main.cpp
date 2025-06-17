@@ -1,9 +1,12 @@
+#include <thalamus/tracing.hpp>
 #include <iostream>
 
 #ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Weverything"
 #endif
+
+#include <boost/asio.hpp>
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -66,7 +69,12 @@ extern "C" {
 #include <Windows.h>
 #endif
 
+#ifdef __clang__
+PERFETTO_TRACK_EVENT_STATIC_STORAGE();
+#endif
+
 using namespace std::chrono_literals;
+using namespace std::placeholders;
 
 static std::chrono::steady_clock::time_point first_start;
 
@@ -102,6 +110,104 @@ static std::chrono::steady_clock::time_point first_start;
 //	SkFILEWStream out(path);
 //	(void)out.write(png->data(), png->size());
 //}
+
+template<typename T>
+class WriteReactor : public grpc::ClientWriteReactor<T> {
+public:
+  std::mutex mutex;
+  std::condition_variable condition;
+  std::list<T> out;
+  grpc::ClientContext context;
+  bool done = false;
+  bool writing = false;
+  ~WriteReactor() override {
+    //grpc::ClientBidiReactor<task_controller_grpc::TaskResult, task_controller_grpc::TaskConfig>::StartWritesDone();
+    context.TryCancel();
+    std::unique_lock<std::mutex> lock(mutex);
+    condition.wait(lock, [&] { return done; });
+  }
+  void start() {
+    grpc::ClientWriteReactor<T>::StartCall();
+  }
+  void OnWriteDone(bool ok) override {
+    if(!ok) {
+      {
+        std::lock_guard<std::mutex> lock(mutex);
+        done = true;
+      }
+      condition.notify_all();
+      return;
+    }
+    std::lock_guard<std::mutex> lock(mutex);
+    out.pop_front();
+    if(!out.empty()) {
+      grpc::ClientWriteReactor<T>::StartWrite(&out.front());
+    } else {
+      writing = false;
+    }
+  }
+  void write(T&& message) {
+    std::lock_guard<std::mutex> lock(mutex);
+    out.push_back(std::move(message));
+    if(!writing) {
+      grpc::ClientWriteReactor<T>::StartWrite(&out.front());
+      writing = true;
+    }
+  }
+  void OnDone(const grpc::Status&) override {
+    std::cout << "OnDone" << std::endl;
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      done = true;
+    }
+    condition.notify_all();
+  }
+};
+
+template<typename T>
+class ReadReactor : public grpc::ClientReadReactor<T> {
+public:
+  std::mutex mutex;
+  std::condition_variable condition;
+  T in;
+  grpc::ClientContext context;
+  bool done = false;
+  boost::asio::io_context& io_context;
+  std::function<void(const T&)> callback;
+  ReadReactor(boost::asio::io_context& _io_context, const std::function<void(const T&)>& _callback) : io_context(_io_context), callback(_callback) {}
+  ~ReadReactor() override {
+    //grpc::ClientBidiReactor<task_controller_grpc::TaskResult, task_controller_grpc::TaskConfig>::StartWritesDone();
+    context.TryCancel();
+    std::unique_lock<std::mutex> lock(mutex);
+    condition.wait(lock, [&] { return done; });
+  }
+  void start() {
+    grpc::ClientReadReactor<T>::StartRead(&in);
+    grpc::ClientReadReactor<T>::StartCall();
+  }
+  void OnReadDone(bool ok) override {
+    if(!ok) {
+      {
+        std::lock_guard<std::mutex> lock(mutex);
+        done = true;
+      }
+      condition.notify_all();
+      return;
+    }
+    boost::asio::post(io_context, [&,c_in=std::move(in)] {
+      callback(c_in);
+    });
+    grpc::ClientReadReactor<T>::StartRead(&in);
+  }
+  void OnDone(const grpc::Status&) override {
+    std::cout << "OnDone" << std::endl;
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      done = true;
+    }
+    condition.notify_all();
+  }
+};
 
 static SDL_Window *mainwindow; /* Our window handle */
 static SDL_Window * operatorwindow; /* Our window handle */
@@ -336,12 +442,28 @@ public:
 #include <lua/paint.hpp>
 #include <lua/canvas.hpp>
 #include <lua/rect.hpp>
+#include <state.hpp>
+#include <state_manager.hpp>
 
-static void gl_example(int width, int height, task_controller_grpc::TaskController::Stub& stub) {
-	std::cout << 1 << std::endl;
-	std::cout << 2 << std::endl;
-	std::cout << 3 << std::endl;
+static WriteReactor<thalamus_grpc::Text>* lualog_reactor;
 
+static int lualog(lua_State* L) {
+  auto text = luaL_checkstring(L, -1);
+  thalamus_grpc::Text message;
+  message.set_time(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+  message.set_text(text);
+  lualog_reactor->write(std::move(message));
+  return 0;
+}
+
+static double get_double(const thalamus::ObservableCollection::Value& value) {
+  if (std::holds_alternative<double>(value)) {
+    return std::get<double>(value);
+  }
+  return double(std::get<long long>(value));
+}
+
+static void gl_example(int width, int height, task_controller_grpc::TaskController::Stub& stub, thalamus_grpc::Thalamus::Stub& thalamus_stub) {
   auto L = luaL_newstate();
   proj_assert(L, "Failed to allocate Lua State");
   luaL_openlibs(L);
@@ -368,11 +490,19 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
   lua_setfield(L, -2, "fontstyle");
   lua_pushcfunction(L, luaopen_font);
   lua_setfield(L, -2, "font");
+
+  lua_pushcfunction(L, lualog);
+  lua_setglobal(L, "thalamus_log");
+
   auto err = luaL_dofile(L, "lua/main.lua");
   if(err) {
     auto err_str = luaL_tolstring(L, -1, nullptr);
     std::cerr << err_str << std::endl;
+    std::abort();
   }
+
+  boost::asio::io_context io_context;
+  boost::optional<boost::asio::io_service::work> m_active = boost::asio::io_service::work(io_context);
 
   Context context;
 
@@ -380,11 +510,162 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
 
   Window main_window{mainwindow, maincontext};
   //Window& operator_window = main_window;
+  thalamus_grpc::Empty empty;
+
   ExecutionReactor reactor;
   stub.async()->execution(&reactor.context, &reactor);
   reactor.start();
-  Window operator_window{operatorwindow, operatorcontext};
+
+  WriteReactor<thalamus_grpc::Text> log_reactor;
+  lualog_reactor = &log_reactor;
+  thalamus_stub.async()->log(&log_reactor.context, &empty, &log_reactor);
+  log_reactor.start();
+
+  std::unique_ptr<Task> task = nullptr;
+
+  int windowx = 0;
+  int windowy = 0;
+  ReadReactor<thalamus_grpc::AnalogResponse> touch_reactor(io_context, [&](const thalamus_grpc::AnalogResponse& response) {
+    if(!task) {
+      return;
+    }
+    double x, y;
+    int count = 0;
+    auto& data = response.data();
+    for(auto i = 0;i < response.spans_size();++i) {
+      auto& span = response.spans(i);
+      if(span.name() == "X" && span.begin() < span.end()) {
+        x = data[span.end() - 1];
+        ++count;
+      } else if(span.name() == "Y" && span.begin() < span.end()) {
+        y = data[span.end() - 1];
+        ++count;
+      }
+    }
+    if(count == 2) {
+      //std::cout << x - windowx << " " << y - windowy << std::endl;
+      task->touch(x - windowx, y - windowy);
+    }
+  });
+  thalamus_grpc::AnalogRequest touch_request;
+  touch_request.mutable_node()->set_type("TOUCH_SCREEN");
+  thalamus_stub.async()->analog(&touch_reactor.context, &touch_request, &touch_reactor);
+  touch_reactor.start();
+
+  std::vector<double> last_scales(8);
   std::vector<double> scales(8);
+  ReadReactor<thalamus_grpc::AnalogResponse> gaze_reactor(io_context, [&](const thalamus_grpc::AnalogResponse& response) {
+    if(!task) {
+      return;
+    }
+    double x, y;
+    int count = 0;
+    auto& data = response.data();
+    for(auto i = 0;i < response.spans_size();++i) {
+      auto& span = response.spans(i);
+      if(span.name() == "X" && span.begin() < span.end()) {
+        x = data[span.end() - 1];
+        ++count;
+      } else if(span.name() == "Y" && span.begin() < span.end()) {
+        y = data[span.end() - 1];
+        ++count;
+      }
+    }
+    if(count == 2) {
+      if(x >= 0) {
+        if(y >= 0) {
+          x *= scales[0];
+          y *= -scales[1];
+        } else {
+          x *= scales[2];
+          y *= -scales[3];
+        }
+      } else {
+        if(y >= 0) {
+          x *= scales[4];
+          y *= -scales[5];
+        } else {
+          x *= scales[6];
+          y *= -scales[7];
+        }
+      }
+      task->gaze(x, y);
+    }
+  });
+  thalamus_grpc::AnalogRequest gaze_request;
+  gaze_request.mutable_node()->set_type("OCULOMATIC");
+  thalamus_stub.async()->analog(&gaze_reactor.context, &gaze_request, &gaze_reactor);
+  gaze_reactor.start();
+
+  auto state = std::make_shared<thalamus::ObservableDict>();
+  thalamus::ObservableDictPtr eye_scaling;
+  thalamus::ObservableDictPtr i;
+  thalamus::ObservableDictPtr ii;
+  thalamus::ObservableDictPtr iii;
+  thalamus::ObservableDictPtr iv;
+  thalamus::ObservableCollection::RecursiveObserver observer = [&] (thalamus::ObservableCollection* source, thalamus::ObservableCollection::Action,
+                       const thalamus::ObservableCollection::Key& key,
+                       const thalamus::ObservableCollection::Value& value) {
+    if(source == state.get()) {
+      auto key_str = std::get<std::string>(key);
+      if(key_str == "eye_scaling") {
+        eye_scaling = std::get<thalamus::ObservableDictPtr>(value);
+        eye_scaling->recap(std::bind(observer, eye_scaling.get(), _1, _2, _3));
+      }
+    } else if (source == eye_scaling.get()) {
+      auto key_str = std::get<std::string>(key);
+      if(key_str == "I") {
+        i = std::get<thalamus::ObservableDictPtr>(value);
+        i->recap(std::bind(observer, i.get(), _1, _2, _3));
+      } else if (key_str == "II") {
+        ii = std::get<thalamus::ObservableDictPtr>(value);
+        ii->recap(std::bind(observer, ii.get(), _1, _2, _3));
+      } else if (key_str == "III") {
+        iii = std::get<thalamus::ObservableDictPtr>(value);
+        iii->recap(std::bind(observer, iii.get(), _1, _2, _3));
+      } else if (key_str == "IV") {
+        iv = std::get<thalamus::ObservableDictPtr>(value);
+        iv->recap(std::bind(observer, iv.get(), _1, _2, _3));
+      }
+    } else if (source == i.get()) {
+      auto key_str = std::get<std::string>(key);
+      auto value_double = get_double(value);
+      if(key_str == "x") {
+        scales[0] = value_double;
+      } else if (key_str == "y") {
+        scales[1] = value_double;
+      }
+    } else if (source == ii.get()) {
+      auto key_str = std::get<std::string>(key);
+      auto value_double = get_double(value);
+      if(key_str == "x") {
+        scales[2] = value_double;
+      } else if (key_str == "y") {
+        scales[3] = value_double;
+      }
+    } else if (source == iii.get()) {
+      auto key_str = std::get<std::string>(key);
+      auto value_double = get_double(value);
+      if(key_str == "x") {
+        scales[4] = value_double;
+      } else if (key_str == "y") {
+        scales[5] = value_double;
+      }
+    } else if (source == iv.get()) {
+      auto key_str = std::get<std::string>(key);
+      auto value_double = get_double(value);
+      if(key_str == "x") {
+        scales[6] = value_double;
+      } else if (key_str == "y") {
+        scales[7] = value_double;
+      }
+    }
+  };
+  state->recursive_changed.connect(observer);
+
+  thalamus::StateManager state_manager(&thalamus_stub, state, io_context);
+
+  Window operator_window{operatorwindow, operatorcontext};
   std::string a;
   main_window.rebuild(width, height);
   operator_window.rebuild(width, height);
@@ -448,7 +729,6 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
 	SDL_Event event;
 	bool running = true;
 	first_start = std::chrono::steady_clock::now();
-  std::unique_ptr<Task> task = nullptr;
 	while (running) {
   	auto start = std::chrono::steady_clock::now();
   	auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
@@ -462,10 +742,17 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
     }
 
   	while (running && elapsed < task_interval) {
+      io_context.poll();
     	if (SDL_WaitEventTimeout(&event, int(task_interval.count() - elapsed.count()))) {
         ImGui_ImplSDL3_ProcessEvent(&event);
 
       	switch (event.type) {
+        case SDL_EVENT_WINDOW_MOVED:
+          {
+            windowx = event.window.data1;
+            windowy = event.window.data2;
+          }
+          break;
         case SDL_EVENT_WINDOW_RESIZED:
           if (event.window.windowID == SDL_GetWindowID(mainwindow)) {
             main_window.rebuild(event.window.data1, event.window.data2);
@@ -561,7 +848,40 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
       task->draw(operator_window.fb_gpuCanvas, View::OPERATOR);
       operator_window.context->flush();
 
+      last_scales = scales;
       draw_ui();
+      if (i) {
+        if (abs(last_scales[0] - scales[0]) > 1e-4) {
+          (*i)["x"].assign(scales[0]);
+        }
+        if (abs(last_scales[1] - scales[1]) > 1e-4) {
+          (*i)["y"].assign(scales[1]);
+        }
+      }
+      if (ii) {
+        if (abs(last_scales[2] - scales[2]) > 1e-4) {
+          (*ii)["x"].assign(scales[2]);
+        }
+        if (abs(last_scales[3] - scales[3]) > 1e-4) {
+          (*ii)["y"].assign(scales[3]);
+        }
+      }
+      if (iii) {
+        if (abs(last_scales[4] - scales[4]) > 1e-4) {
+          (*iii)["x"].assign(scales[4]);
+        }
+        if (abs(last_scales[5] - scales[5]) > 1e-4) {
+          (*iii)["y"].assign(scales[5]);
+        }
+      }
+      if (iv) {
+        if (abs(last_scales[6] - scales[6]) > 1e-4) {
+          (*iv)["x"].assign(scales[6]);
+        }
+        if (abs(last_scales[7] - scales[7]) > 1e-4) {
+          (*iv)["y"].assign(scales[7]);
+        }
+      }
       SDL_GL_SwapWindow(operatorwindow);
 
       auto status = task->status();
@@ -690,7 +1010,7 @@ int main(int, char*[]) {
     auto thalamus_stub = thalamus_grpc::Thalamus::NewStub(thalamus_channel);
     auto task_controller_stub = task_controller_grpc::TaskController::NewStub(task_controller_channel);
 
-    gl_example(512, 512, *task_controller_stub);
+    gl_example(512, 512, *task_controller_stub, *thalamus_stub);
   }
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplSDL3_Shutdown();

@@ -14,7 +14,9 @@ function HoldStateMachine.new(hold, blink)
 end
 
 function HoldStateMachine:lost()
-  self.blink_start = os.clock()
+  if self.blink_start == nil then
+    self.blink_start = os.clock()
+  end
 end
 
 function HoldStateMachine:acquired(value)
@@ -40,7 +42,7 @@ function HoldStateMachine:update()
   --print((now - self.start) .. (self.hold + self.blink_time))
   if self.blink_start ~= nil then
     local current_blink_time = now - self.blink_start
-    print(current_blink_time .. ' ' .. self.blink)
+    --print(current_blink_time .. ' ' .. self.blink)
     if current_blink_time > self.blink then
       return "FAIL"
     end

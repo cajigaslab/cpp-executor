@@ -67,6 +67,7 @@ include(cmake/skia.cmake)
 include(cmake/sdl.cmake)
 include(cmake/imgui.cmake)
 include(cmake/lua.cmake)
+include(cmake/boost.cmake)
 
 set(PROTO_SOURCES thalamus.proto task_controller.proto)
 apply_protoc_grpc(PROTO_GENERATED_SOURCES ${PROTO_SOURCES})
@@ -89,6 +90,10 @@ add_executable(cpp_executor
   src/lua_task.hpp
   src/hold_state_machine.cpp
   src/hold_state_machine.hpp
+  src/state.cpp
+  src/state.hpp
+  src/state_manager.cpp
+  src/state_manager.hpp
   src/lua/rect.cpp
   src/lua/rect.hpp
   src/lua/font.cpp
@@ -105,6 +110,8 @@ add_executable(cpp_executor
   src/lua/fontmanager.hpp
   src/lua/canvas.cpp
   src/lua/canvas.hpp
+  src/thalamus/tracing.cpp
+  src/thalamus/tracing.hpp
   src/main.cpp)
 
 if(WIN32)
@@ -118,7 +125,7 @@ else()
 endif()
 target_compile_options(cpp_executor PRIVATE ${WARNING_FLAGS})
 target_include_directories(cpp_executor PRIVATE src)
-target_link_libraries(cpp_executor sdl skia protoc_generated grpc++ perfetto imgui jsoncpp lua)
+target_link_libraries(cpp_executor sdl skia protoc_generated grpc++ perfetto imgui jsoncpp lua boost perfetto)
 
 if(NOT "${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
   target_link_options(cpp_executor PRIVATE -g)
