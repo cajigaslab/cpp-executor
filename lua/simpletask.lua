@@ -42,7 +42,7 @@ function SimpleTask.new(context)
     success_timeout = success_timeout,
     fail_timeout = fail_timeout,
     blink_timeout = blink_timeout,
-    start = os.clock(),
+    start = steady.clock(),
     _status = nil
   }
   setmetatable(result, SimpleTask)
@@ -50,7 +50,7 @@ function SimpleTask.new(context)
 end
 
 function SimpleTask:set_state(state)
-  self.start = os.clock()
+  self.start = steady.clock()
   self.state = state
   self.context.log('BehavState=' .. state)
 end
@@ -80,12 +80,12 @@ function SimpleTask:update()
   if self.state == 'NONE' then
     self:set_state('INTERTRIAL')
   elseif self.state == 'INTERTRIAL' then
-    local now = os.clock()
+    local now = steady.clock()
     if now - self.start > self.intertrial_timeout then
       self:set_state('START_ON')
     end
   elseif self.state == 'START_ON' then
-    local now = os.clock()
+    local now = steady.clock()
     if now - self.start > self.start_timeout then
       self:set_state('INTERTRIAL')
     end
@@ -97,12 +97,12 @@ function SimpleTask:update()
       self:set_state('FAIL')
     end
   elseif self.state == 'SUCCESS' then
-    local now = os.clock()
+    local now = steady.clock()
     if now - self.start > self.success_timeout then
       self._status = {success = true}
     end
   elseif self.state == 'FAIL' then
-    local now = os.clock()
+    local now = steady.clock()
     if now - self.start > self.fail_timeout then
       self._status = {success = false}
     end
@@ -117,9 +117,9 @@ function SimpleTask:draw(canvas, view)
     canvas:drawRect(self.corner_rect, self.target_paint);
   end
   if view == 'OPERATOR' then
-    local now = os.clock()
+    local now = steady.clock()
     local duration = now - self.start;
-    local text = view .. ' ' .. duration
+    local text = self.state .. ' ' .. duration
     canvas:drawString(text, 0, 50, font, paint);
   end
 end

@@ -94,8 +94,14 @@ else()
                             "${boost_content_SOURCE_DIR}/stage-debug/lib/libboost_json.a"
                             "${boost_content_SOURCE_DIR}/stage-debug/lib/libboost_atomic.a"
                     COMMAND
-		    sh ${CMAKE_SOURCE_DIR}/build_boost.sh "${ALL_COMPILE_OPTIONS_SPACED} -DBOOST_ASIO_HAS_STD_INVOKE_RESULT" " ${ALL_LINK_OPTIONS_SPACED}" debug
-                    WORKING_DIRECTORY ${boost_content_SOURCE_DIR})
+        ./b2 toolset=clang 
+        "cxxflags=${ALL_COMPILE_OPTIONS_SPACED} -DBOOST_ASIO_HAS_STD_INVOKE_RESULT"
+        "cflags=${ALL_COMPILE_OPTIONS_SPACED} -DBOOST_ASIO_HAS_STD_INVOKE_RESULT" 
+        "linkflags=${ALL_LINK_OPTIONS_SPACED}" --stagedir=stage-debug --with-atomic --with-chrono --with-thread --with-filesystem
+        --with-date_time --with-system --with-program_options --with-log --with-json --with-container visibility=global link=static
+        address-model=64 cxxstd=20 debug
+        WORKING_DIRECTORY ${boost_content_SOURCE_DIR})
+
   add_custom_command(
     DEPENDS "${boost_content_SOURCE_DIR}/b2"
     OUTPUT "${boost_content_SOURCE_DIR}/stage-release/lib/libboost_date_time.a"
@@ -110,8 +116,14 @@ else()
                             "${boost_content_SOURCE_DIR}/stage-release/lib/libboost_json.a"
                             "${boost_content_SOURCE_DIR}/stage-release/lib/libboost_atomic.a"
                     COMMAND
-		    sh ${CMAKE_SOURCE_DIR}/build_boost.sh "${ALL_COMPILE_OPTIONS_SPACED} -DBOOST_ASIO_HAS_STD_INVOKE_RESULT" " ${ALL_LINK_OPTIONS_SPACED}" release
+        ./b2 toolset=clang 
+        "cxxflags=${ALL_COMPILE_OPTIONS_SPACED} -DBOOST_ASIO_HAS_STD_INVOKE_RESULT"
+        "cflags=${ALL_COMPILE_OPTIONS_SPACED} -DBOOST_ASIO_HAS_STD_INVOKE_RESULT" 
+        "linkflags=${ALL_LINK_OPTIONS_SPACED}" --stagedir=stage-release --with-atomic --with-chrono --with-thread --with-filesystem
+        --with-date_time --with-system --with-program_options --with-log --with-json --with-container visibility=global link=static
+        address-model=64 cxxstd=20 release
                     WORKING_DIRECTORY ${boost_content_SOURCE_DIR})
+
   add_library(boost INTERFACE
     "$<IF:$<CONFIG:Debug>,${boost_content_SOURCE_DIR}/stage-debug/lib/libboost_date_time.a,${boost_content_SOURCE_DIR}/stage-release/lib/libboost_date_time.a>"
     "$<IF:$<CONFIG:Debug>,${boost_content_SOURCE_DIR}/stage-debug/lib/libboost_filesystem.a,${boost_content_SOURCE_DIR}/stage-release/lib/libboost_filesystem.a>"

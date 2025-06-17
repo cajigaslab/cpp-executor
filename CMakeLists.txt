@@ -114,6 +114,8 @@ add_executable(cpp_executor
   src/thalamus/tracing.hpp
   src/main.cpp)
 
+find_package(PkgConfig)
+
 if(WIN32)
   target_compile_definitions(cpp_executor PRIVATE _WIN32_WINNT=0x0A00 _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN BOOST_STACKTRACE_USE_WINDBG)
   target_link_libraries(cpp_executor dbgeng ole32 kernel32 user32 gdi32 winmm imm32 oleaut32 version uuid advapi32 setupapi shell32 dinput8 opengl32 usp10)
@@ -121,6 +123,9 @@ if(WIN32)
 elseif(APPLE)
   target_compile_definitions(cpp_executor PRIVATE _GNU_SOURCE)
 else()
+  pkg_check_modules(FONTCONFIG REQUIRED fontconfig)
+  target_link_libraries(cpp_executor ${FONTCONFIG_LIBRARIES})
+  target_include_directories(cpp_executor PRIVATE ${FONTCONFIG_INCLUDE_DIRS})
   target_link_libraries(cpp_executor m)
 endif()
 target_compile_options(cpp_executor PRIVATE ${WARNING_FLAGS})

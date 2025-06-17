@@ -456,6 +456,13 @@ static int lualog(lua_State* L) {
   return 0;
 }
 
+static int lua_steady_clock(lua_State* L) {
+  auto ticks = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch());
+  auto seconds = ticks.count()/1e9;
+  lua_pushnumber(L, seconds);
+  return 1;
+}
+
 static double get_double(const thalamus::ObservableCollection::Value& value) {
   if (std::holds_alternative<double>(value)) {
     return std::get<double>(value);
@@ -493,6 +500,14 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
 
   lua_pushcfunction(L, lualog);
   lua_setglobal(L, "thalamus_log");
+
+  lua_newtable(L);
+  lua_pushcfunction(L, lua_steady_clock);
+  lua_setfield(L, -2, "clock");
+  lua_setglobal(L, "steady");
+
+  lua_pushcfunction(L, lua_steady_clock);
+  lua_setglobal(L, "steady_clock");
 
   auto err = luaL_dofile(L, "lua/main.lua");
   if(err) {

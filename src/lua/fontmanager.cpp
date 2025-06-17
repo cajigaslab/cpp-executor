@@ -7,7 +7,11 @@
 #include "include/core/SkFont.h"
 #include "include/core/SkFontMgr.h"
 #include "include/core/SkFontStyle.h"
+#ifdef _WIN32
 #include "include/ports/SkTypeface_win.h"
+#else
+#include "include/ports/SkFontMgr_fontconfig.h"
+#endif
 #include <lua/font.hpp>
 #ifdef __clang__
 #pragma clang diagnostic pop
@@ -21,7 +25,11 @@ static int fontmanager_new(lua_State* L) {
 
   luaL_setmetatable(L, "Thalamus.FontManager");
 
+#ifdef _WIN32
   *userdata = SkFontMgr_New_GDI();
+#else
+  *userdata = SkFontMgr_New_FontConfig(nullptr);
+#endif
   return 1;
 }
 
