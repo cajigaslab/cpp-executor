@@ -502,7 +502,7 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
   }
 
   boost::asio::io_context io_context;
-  boost::optional<boost::asio::io_service::work> m_active = boost::asio::io_service::work(io_context);
+  //boost::optional<boost::asio::io_service::work> m_active = boost::asio::io_service::work(io_context);
 
   Context context;
 
@@ -729,9 +729,17 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
 	SDL_Event event;
 	bool running = true;
 	first_start = std::chrono::steady_clock::now();
-	while (running) {
-  	auto start = std::chrono::steady_clock::now();
-  	auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
+
+  boost::asio::steady_timer window_timer(io_context);
+  std::function<void(const boost::system::error_code&)> update_window = [&] (const boost::system::error_code& ec) {
+    if(ec) {
+      std::cerr << ec.message() << std::endl;
+      return;
+    }
+    if(!running) {
+      return;
+    }
+
     auto task_config = reactor.receive_task_config();
     if(task_config.has_value()) {
       std::cout << task_config->body() << std::endl;
@@ -741,84 +749,77 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
       task.reset(make_task(context, L));
     }
 
-  	while (running && elapsed < task_interval) {
-      io_context.poll();
-    	if (SDL_WaitEventTimeout(&event, int(task_interval.count() - elapsed.count()))) {
-        ImGui_ImplSDL3_ProcessEvent(&event);
-
-      	switch (event.type) {
-        case SDL_EVENT_WINDOW_MOVED:
-          {
-            windowx = event.window.data1;
-            windowy = event.window.data2;
+    while (SDL_PollEvent(&event)) {
+      ImGui_ImplSDL3_ProcessEvent(&event);
+      switch (event.type) {
+      case SDL_EVENT_WINDOW_MOVED:
+        {
+          windowx = event.window.data1;
+          windowy = event.window.data2;
+        }
+        break;
+      case SDL_EVENT_WINDOW_RESIZED:
+        if (event.window.windowID == SDL_GetWindowID(mainwindow)) {
+          main_window.rebuild(event.window.data1, event.window.data2);
+          success = SDL_GL_MakeCurrent(operatorwindow, operatorcontext);
+          proj_assert(success, "SDL_GL_MakeCurrent failed");
+          std::cout << "Remake buffer" << std::endl;
+          frameBuffer = FrameBuffer(&operator_window.gl_face->fFunctions, event.window.data1, event.window.data2);
+          operator_window.rebuild(event.window.data1, event.window.data2, frameBuffer.buffer);
+          frameBuffer.fFunctions = &operator_window.gl_face->fFunctions;
+        }
+        //else if (event.window.windowID == SDL_GetWindowID(operatorwindow)) {
+        //  operator_window.rebuild(event.window.data1, event.window.data2, FramebufferName);
+        //}
+        break;
+      case SDL_EVENT_MOUSE_MOTION:
+        if(task && event.motion.windowID == SDL_GetWindowID(mainwindow)) {
+          if(event.motion.state & SDL_BUTTON_LMASK) {
+            task->touch(int(event.motion.x), int(event.motion.y));
+          } 
+          if (event.motion.state & SDL_BUTTON_RMASK) {
+            task->gaze(int(event.motion.x), int(event.motion.y));
+          }
+        }
+        break;
+      case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        if(task && event.button.windowID == SDL_GetWindowID(mainwindow)) {
+          if(event.button.button == SDL_BUTTON_LEFT) {
+            task->touch(int(event.button.x), int(event.button.y));
+          } 
+          if (event.button.button == SDL_BUTTON_RIGHT) {
+            task->gaze(int(event.button.x), int(event.button.y));
+          }
+        }
+        break;
+      case SDL_EVENT_MOUSE_BUTTON_UP:
+        if(task && event.button.windowID == SDL_GetWindowID(mainwindow)) {
+          if(event.button.button == SDL_BUTTON_LEFT) {
+            task->touch(-1, -1);
+          } 
+        }
+        break;
+      case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+      case SDL_EVENT_QUIT:
+      	std::cout << "quit" << std::endl;
+      	running = false;
+      	break;
+      case SDL_EVENT_KEY_UP:
+        switch(event.key.key) {
+        case SDLK_F:
+          if(event.key.mod & SDL_KMOD_LCTRL) {
+            auto flags = SDL_GetWindowFlags(mainwindow);
+            auto new_flag = flags & SDL_WINDOW_FULLSCREEN ? 0 : SDL_WINDOW_FULLSCREEN;
+            SDL_SetWindowFullscreen(mainwindow, new_flag);
           }
           break;
-        case SDL_EVENT_WINDOW_RESIZED:
-          if (event.window.windowID == SDL_GetWindowID(mainwindow)) {
-            main_window.rebuild(event.window.data1, event.window.data2);
-            success = SDL_GL_MakeCurrent(operatorwindow, operatorcontext);
-            proj_assert(success, "SDL_GL_MakeCurrent failed");
-            std::cout << "Remake buffer" << std::endl;
-            frameBuffer = FrameBuffer(&operator_window.gl_face->fFunctions, event.window.data1, event.window.data2);
-            operator_window.rebuild(event.window.data1, event.window.data2, frameBuffer.buffer);
-            frameBuffer.fFunctions = &operator_window.gl_face->fFunctions;
-          }
-          //else if (event.window.windowID == SDL_GetWindowID(operatorwindow)) {
-          //  operator_window.rebuild(event.window.data1, event.window.data2, FramebufferName);
-          //}
+        case SDLK_ESCAPE:
+          SDL_SetWindowFullscreen(mainwindow, 0);
           break;
-        case SDL_EVENT_MOUSE_MOTION:
-          if(task && event.motion.windowID == SDL_GetWindowID(mainwindow)) {
-            if(event.motion.state & SDL_BUTTON_LMASK) {
-              task->touch(int(event.motion.x), int(event.motion.y));
-            } 
-            if (event.motion.state & SDL_BUTTON_RMASK) {
-              task->gaze(int(event.motion.x), int(event.motion.y));
-            }
-          }
-          break;
-        case SDL_EVENT_MOUSE_BUTTON_DOWN:
-          if(task && event.button.windowID == SDL_GetWindowID(mainwindow)) {
-            if(event.button.button == SDL_BUTTON_LEFT) {
-              task->touch(int(event.button.x), int(event.button.y));
-            } 
-            if (event.button.button == SDL_BUTTON_RIGHT) {
-              task->gaze(int(event.button.x), int(event.button.y));
-            }
-          }
-          break;
-        case SDL_EVENT_MOUSE_BUTTON_UP:
-          if(task && event.button.windowID == SDL_GetWindowID(mainwindow)) {
-            if(event.button.button == SDL_BUTTON_LEFT) {
-              task->touch(-1, -1);
-            } 
-          }
-          break;
-        case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
-      	case SDL_EVENT_QUIT:
-        	std::cout << "quit" << std::endl;
-        	running = false;
-        	break;
-        case SDL_EVENT_KEY_UP:
-          switch(event.key.key) {
-          case SDLK_F:
-            if(event.key.mod & SDL_KMOD_LCTRL) {
-              auto flags = SDL_GetWindowFlags(mainwindow);
-              auto new_flag = flags & SDL_WINDOW_FULLSCREEN ? 0 : SDL_WINDOW_FULLSCREEN;
-              SDL_SetWindowFullscreen(mainwindow, new_flag);
-            }
-            break;
-          case SDLK_ESCAPE:
-            SDL_SetWindowFullscreen(mainwindow, 0);
-            break;
-          }
-          break;
-      	}
-    	}
-    	elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
-    	//std::cout << "DRAW " << << std::endl;
-  	}
-  	//std::cout << "DRAW" << std::endl;
+        }
+        break;
+      }
+    }
 
     success = SDL_GL_MakeCurrent(mainwindow, maincontext);
     proj_assert(success, "SDL_GL_MakeCurrent failed");
@@ -892,24 +893,15 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
       }
     }
 
-    //success = SDL_GL_MakeCurrent(operatorwindow, operatorcontext);
-    //operator_window.gl_face->fFunctions.fViewport(0, 0, operator_window.width, operator_window.height);
-    //
-    //operator_window.gpuCanvas->resetMatrix();
-    //auto scale = std::min(double(operator_window.width) / main_window.width, double(operator_window.height) / main_window.height);
-    //operator_window.gpuCanvas->scale(scale, scale);
-    //draw(operator_window.gpuCanvas);
-    //operator_window.context->flush();
-    //
-    //SDL_GL_SwapWindow(operatorwindow);
-	}
-	//sk_sp<SkImage> img(gpuSurface->makeImageSnapshot());
-	//if (!img) { return; }
-	//// Must pass non-null context so the pixels can be read back and encoded.
-	//sk_sp<SkData> png = SkPngEncoder::Encode(context.get(), img.get(), {});
-	//if (!png) { return; }
-	//SkFILEWStream out(path);
-	//(void)out.write(png->data(), png->size());
+    window_timer.expires_after(4ms);
+    window_timer.async_wait(update_window);
+  };
+  window_timer.expires_after(4ms);
+  window_timer.async_wait(update_window);
+
+  SDL_GetWindowPosition(mainwindow, &windowx, &windowy);
+  io_context.run();
+  
   lua_close(L);
   success = SDL_GL_MakeCurrent(operatorwindow, operatorcontext);
   frameBuffer.clear();
