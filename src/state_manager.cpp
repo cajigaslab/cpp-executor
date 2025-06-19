@@ -159,7 +159,6 @@ struct StateManager::Impl {
   ObservableCollection::Value state;
   ObservableCollection::Value root;
   boost::asio::io_context &io_context;
-  std::atomic_bool running;
   std::atomic<
       ::grpc::ClientReaderWriter<::thalamus_grpc::ObservableTransaction,
                                  ::thalamus_grpc::ObservableTransaction> *>
@@ -169,7 +168,6 @@ struct StateManager::Impl {
   const size_t WRITE = 2;
   std::vector<thalamus_grpc::ObservableTransaction> outbox;
   std::mutex mutex;
-  ::grpc::ClientContext context;
   std::thread grpc_thread;
   boost::signals2::signal<void(ObservableCollection::Action action,
                                const std::string &address,
@@ -180,8 +178,7 @@ struct StateManager::Impl {
 
   Impl(thalamus_grpc::Thalamus::Stub *_stub, ObservableCollection::Value _state,
        boost::asio::io_context &_io_context)
-      : stub(_stub), reactor(_io_context, _state), state(_state), root(state), io_context(_io_context),
-        running(true) {
+      : stub(_stub), reactor(_io_context, _state), state(_state), root(state), io_context(_io_context) {
 
     std::promise<void> promise;
     std::future<void> future = promise.get_future();
@@ -206,7 +203,7 @@ struct StateManager::Impl {
     });
     future.get();
 
-    stub->async()->observable_bridge_v2(&context, &reactor);
+    stub->async()->observable_bridge_v2(&reactor.context, &reactor);
     reactor.start();
     if (std::holds_alternative<ObservableListPtr>(state)) {
       auto temp = std::get<ObservableListPtr>(state);
@@ -217,11 +214,6 @@ struct StateManager::Impl {
       temp->set_remote_storage(
           std::bind(&Impl::send_change, this, _1, _2, _3, _4));
     }
-  }
-
-  ~Impl() {
-    running = false;
-    context.TryCancel();
   }
 
   bool send_change(ObservableCollection::Action action,

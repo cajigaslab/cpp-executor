@@ -502,6 +502,7 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
   }
 
   boost::asio::io_context io_context;
+  boost::asio::io_context logic_io_context;
   //boost::optional<boost::asio::io_service::work> m_active = boost::asio::io_service::work(io_context);
 
   Context context;
@@ -521,14 +522,12 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
   thalamus_stub.async()->log(&log_reactor.context, &empty, &log_reactor);
   log_reactor.start();
 
+  std::mutex mutex;
   std::unique_ptr<Task> task = nullptr;
 
   int windowx = 0;
   int windowy = 0;
-  ReadReactor<thalamus_grpc::AnalogResponse> touch_reactor(io_context, [&](const thalamus_grpc::AnalogResponse& response) {
-    if(!task) {
-      return;
-    }
+  ReadReactor<thalamus_grpc::AnalogResponse> touch_reactor(logic_io_context, [&](const thalamus_grpc::AnalogResponse& response) {
     double x, y;
     int count = 0;
     auto& data = response.data();
@@ -544,6 +543,10 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
     }
     if(count == 2) {
       //std::cout << x - windowx << " " << y - windowy << std::endl;
+      std::lock_guard<std::mutex> lock(mutex);
+      if(!task) {
+        return;
+      }
       task->touch(x - windowx, y - windowy);
     }
   });
@@ -554,10 +557,7 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
 
   std::vector<double> last_scales(8);
   std::vector<double> scales(8);
-  ReadReactor<thalamus_grpc::AnalogResponse> gaze_reactor(io_context, [&](const thalamus_grpc::AnalogResponse& response) {
-    if(!task) {
-      return;
-    }
+  ReadReactor<thalamus_grpc::AnalogResponse> gaze_reactor(logic_io_context, [&](const thalamus_grpc::AnalogResponse& response) {
     double x, y;
     int count = 0;
     auto& data = response.data();
@@ -572,6 +572,7 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
       }
     }
     if(count == 2) {
+      std::lock_guard<std::mutex> lock(mutex);
       if(x >= 0) {
         if(y >= 0) {
           x *= scales[0];
@@ -588,6 +589,9 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
           x *= scales[6];
           y *= -scales[7];
         }
+      }
+      if(!task) {
+        return;
       }
       task->gaze(x, y);
     }
@@ -630,6 +634,7 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
     } else if (source == i.get()) {
       auto key_str = std::get<std::string>(key);
       auto value_double = get_double(value);
+      std::lock_guard<std::mutex> lock(mutex);
       if(key_str == "x") {
         scales[0] = value_double;
       } else if (key_str == "y") {
@@ -638,6 +643,7 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
     } else if (source == ii.get()) {
       auto key_str = std::get<std::string>(key);
       auto value_double = get_double(value);
+      std::lock_guard<std::mutex> lock(mutex);
       if(key_str == "x") {
         scales[2] = value_double;
       } else if (key_str == "y") {
@@ -646,6 +652,7 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
     } else if (source == iii.get()) {
       auto key_str = std::get<std::string>(key);
       auto value_double = get_double(value);
+      std::lock_guard<std::mutex> lock(mutex);
       if(key_str == "x") {
         scales[4] = value_double;
       } else if (key_str == "y") {
@@ -654,6 +661,7 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
     } else if (source == iv.get()) {
       auto key_str = std::get<std::string>(key);
       auto value_double = get_double(value);
+      std::lock_guard<std::mutex> lock(mutex);
       if(key_str == "x") {
         scales[6] = value_double;
       } else if (key_str == "y") {
@@ -663,7 +671,7 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
   };
   state->recursive_changed.connect(observer);
 
-  thalamus::StateManager state_manager(&thalamus_stub, state, io_context);
+  thalamus::StateManager state_manager(&thalamus_stub, state, logic_io_context);
 
   Window operator_window{operatorwindow, operatorcontext};
   std::string a;
@@ -693,7 +701,6 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
     ImGui::Image(frameBuffer.texture, ImVec2(float(main_window.width* scale), float(main_window.height * scale)), ImVec2(0, 1), ImVec2(1, 0));
     if (ImGui::BeginTable("split", 4))
     {
-      
       ImGui::TableNextColumn(); ImGui::Text("I");
       ImGui::TableNextColumn();
       ImGui::TableNextColumn(); ImGui::Text("II");
@@ -727,26 +734,18 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
 
 	std::cout << 1 << std::endl;
 	SDL_Event event;
-	bool running = true;
 	first_start = std::chrono::steady_clock::now();
+
+  auto stop = [&] {
+    io_context.stop();
+    logic_io_context.stop();
+  };
 
   boost::asio::steady_timer window_timer(io_context);
   std::function<void(const boost::system::error_code&)> update_window = [&] (const boost::system::error_code& ec) {
     if(ec) {
       std::cerr << ec.message() << std::endl;
       return;
-    }
-    if(!running) {
-      return;
-    }
-
-    auto task_config = reactor.receive_task_config();
-    if(task_config.has_value()) {
-      std::cout << task_config->body() << std::endl;
-      std::stringstream stream(task_config->body());
-      stream >> context.config;
-      std::cout << context.config;
-      task.reset(make_task(context, L));
     }
 
     while (SDL_PollEvent(&event)) {
@@ -773,28 +772,35 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
         //}
         break;
       case SDL_EVENT_MOUSE_MOTION:
-        if(task && event.motion.windowID == SDL_GetWindowID(mainwindow)) {
-          if(event.motion.state & SDL_BUTTON_LMASK) {
-            task->touch(int(event.motion.x), int(event.motion.y));
-          } 
-          if (event.motion.state & SDL_BUTTON_RMASK) {
-            task->gaze(int(event.motion.x), int(event.motion.y));
+        if(event.motion.windowID == SDL_GetWindowID(mainwindow)) {
+          std::lock_guard<std::mutex> lock(mutex);
+          if(task) {
+            if(event.motion.state & SDL_BUTTON_LMASK) {
+              task->touch(int(event.motion.x), int(event.motion.y));
+            } 
+            if (event.motion.state & SDL_BUTTON_RMASK) {
+              task->gaze(int(event.motion.x), int(event.motion.y));
+            }
           }
         }
         break;
       case SDL_EVENT_MOUSE_BUTTON_DOWN:
-        if(task && event.button.windowID == SDL_GetWindowID(mainwindow)) {
-          if(event.button.button == SDL_BUTTON_LEFT) {
-            task->touch(int(event.button.x), int(event.button.y));
-          } 
-          if (event.button.button == SDL_BUTTON_RIGHT) {
-            task->gaze(int(event.button.x), int(event.button.y));
+        if(event.button.windowID == SDL_GetWindowID(mainwindow)) {
+          std::lock_guard<std::mutex> lock(mutex);
+          if(task) {
+            if(event.button.button == SDL_BUTTON_LEFT) {
+              task->touch(int(event.button.x), int(event.button.y));
+            } 
+            if (event.button.button == SDL_BUTTON_RIGHT) {
+              task->gaze(int(event.button.x), int(event.button.y));
+            }
           }
         }
         break;
       case SDL_EVENT_MOUSE_BUTTON_UP:
-        if(task && event.button.windowID == SDL_GetWindowID(mainwindow)) {
-          if(event.button.button == SDL_BUTTON_LEFT) {
+        if(event.button.windowID == SDL_GetWindowID(mainwindow)) {
+          std::lock_guard<std::mutex> lock(mutex);
+          if(task && event.button.button == SDL_BUTTON_LEFT) {
             task->touch(-1, -1);
           } 
         }
@@ -802,7 +808,7 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
       case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
       case SDL_EVENT_QUIT:
       	std::cout << "quit" << std::endl;
-      	running = false;
+        stop();
       	break;
       case SDL_EVENT_KEY_UP:
         switch(event.key.key) {
@@ -821,24 +827,19 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
       }
     }
 
-    success = SDL_GL_MakeCurrent(mainwindow, maincontext);
-    proj_assert(success, "SDL_GL_MakeCurrent failed");
-    main_window.gl_face->fFunctions.fBindFramebuffer(GR_GL_FRAMEBUFFER, 0);
-    //auto glerr = main_window.gl_face->fFunctions.fGetError();
-    main_window.gl_face->fFunctions.fViewport(0, 0, main_window.width, main_window.height);
-
-    if(task) {
-      task->update();
-
+    {
+      std::lock_guard<std::mutex> lock(mutex);
       success = SDL_GL_MakeCurrent(mainwindow, maincontext);
+      proj_assert(success, "SDL_GL_MakeCurrent failed");
       main_window.gl_face->fFunctions.fBindFramebuffer(GR_GL_FRAMEBUFFER, 0);
       //auto glerr = main_window.gl_face->fFunctions.fGetError();
       main_window.gl_face->fFunctions.fViewport(0, 0, main_window.width, main_window.height);
       main_window.gpuCanvas->resetMatrix();
       main_window.gpuCanvas->clear(SK_ColorBLACK);
-      task->draw(main_window.gpuCanvas, View::SUBJECT);
+      if(task) {
+        task->draw(main_window.gpuCanvas, View::SUBJECT);
+      }
       main_window.context->flush();
-      SDL_GL_SwapWindow(mainwindow);
 
       success = SDL_GL_MakeCurrent(operatorwindow, operatorcontext);
       operator_window.gl_face->fFunctions.fBindFramebuffer(GR_GL_FRAMEBUFFER, frameBuffer.buffer);
@@ -846,7 +847,9 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
       operator_window.gl_face->fFunctions.fViewport(0, 0, operator_window.width, operator_window.height);
       operator_window.fb_gpuCanvas->resetMatrix();
       operator_window.fb_gpuCanvas->clear(SK_ColorBLACK);
-      task->draw(operator_window.fb_gpuCanvas, View::OPERATOR);
+      if(task) {
+        task->draw(operator_window.fb_gpuCanvas, View::OPERATOR);
+      }
       operator_window.context->flush();
 
       last_scales = scales;
@@ -883,15 +886,11 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
           (*iv)["y"].assign(scales[7]);
         }
       }
-      SDL_GL_SwapWindow(operatorwindow);
-
-      auto status = task->status();
-      if(status.has_value()) {
-        std::cout << "Respond" << std::endl;
-        reactor.send_task_result(*status);
-        task.reset();
-      }
     }
+    success = SDL_GL_MakeCurrent(mainwindow, maincontext);
+    SDL_GL_SwapWindow(mainwindow);
+    success = SDL_GL_MakeCurrent(operatorwindow, operatorcontext);
+    SDL_GL_SwapWindow(operatorwindow);
 
     window_timer.expires_after(4ms);
     window_timer.async_wait(update_window);
@@ -899,8 +898,47 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
   window_timer.expires_after(4ms);
   window_timer.async_wait(update_window);
 
+  boost::asio::steady_timer logic_timer(logic_io_context);
+  std::function<void(const boost::system::error_code&)> update_logic = [&] (const boost::system::error_code& ec) {
+    if(ec) {
+      std::cerr << ec.message() << std::endl;
+      return;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex);
+    if(task) {
+      task->update();
+      auto status = task->status();
+      if(status.has_value()) {
+        std::cout << "Respond" << std::endl;
+        reactor.send_task_result(*status);
+        task.reset();
+      }
+    } else {
+      auto task_config = reactor.receive_task_config();
+      if(task_config.has_value()) {
+        std::cout << task_config->body() << std::endl;
+        std::stringstream stream(task_config->body());
+        stream >> context.config;
+        std::cout << context.config;
+        task.reset(make_task(context, L));
+      }
+    }
+
+    logic_timer.expires_after(4ms);
+    logic_timer.async_wait(update_logic);
+  };
+  logic_timer.expires_after(4ms);
+  logic_timer.async_wait(update_logic);
+
   SDL_GetWindowPosition(mainwindow, &windowx, &windowy);
+
+  std::thread update_thread([&] {
+    logic_io_context.run();
+  });
   io_context.run();
+
+  update_thread.join();
   
   lua_close(L);
   success = SDL_GL_MakeCurrent(operatorwindow, operatorcontext);
