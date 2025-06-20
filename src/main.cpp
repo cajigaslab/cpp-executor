@@ -625,6 +625,14 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
 
   lua_setglobal(L, "thalamus");
 
+  lua_newtable(L);
+  lua_pushcfunction(L, lua_steady_clock);
+  lua_setfield(L, -2, "clock");
+  lua_setglobal(L, "steady");
+
+  lua_pushcfunction(L, lua_steady_clock);
+  lua_setglobal(L, "steady_clock");
+
   auto err = luaL_dofile(L, "lua/main.lua");
   if (err) {
     auto err_str = luaL_tolstring(L, -1, nullptr);

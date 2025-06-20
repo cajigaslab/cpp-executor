@@ -52,6 +52,8 @@ static void json_to_lua(lua_State* L, const Json::Value& json) {
     }
     if(i->isIntegral()) {
       lua_pushinteger(L, i->asInt());
+    } else if(i->isNumeric()) {
+      lua_pushnumber(L, i->asDouble());
     } else if(i->isString()) {
       lua_pushstring(L, i->asString().c_str());
     } else if(i->isBool()) {

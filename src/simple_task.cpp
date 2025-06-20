@@ -10,7 +10,11 @@
 #include <include/core/SkFont.h>
 #include <include/core/SkColor.h>
 #include "include/core/SkFontMgr.h"
+#ifdef _WIN32
 #include "include/ports/SkTypeface_win.h"
+#else
+#include "include/ports/SkFontMgr_fontconfig.h"
+#endif
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
@@ -56,7 +60,11 @@ struct SimpleTask::Impl {
     target = SkRect::MakeXYWH(float(target_x), float(target_y), float(target_width), float(target_height));
     target_color = context.get_color_field("target_color");
 
+#ifdef _WIN32
     auto fontMgr = SkFontMgr_New_GDI();
+#else
+    auto fontMgr = SkFontMgr_New_FontConfig(nullptr);
+#endif
     face = fontMgr->matchFamilyStyle(nullptr, SkFontStyle());
     //face = fontMgr->makeFromFile("C:\\Users\\jarl\\Downloads\\cmu\\cmunsx.ttf");
   }
