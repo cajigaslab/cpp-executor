@@ -1,6 +1,60 @@
 local color = require 'color'
 local SimpleTask = require 'simpletask'
 
+function thalamus.wait(condition, timeout)
+  local sleep
+  if timeout == nil then
+    sleep = function() return false end
+  else
+    sleep = thalamus.sleep(timeout)
+  end
+
+  coroutine.yield(function()
+    return condition() or sleep()
+  end)
+  return condition()
+end
+
+function thalamus.hold(is_held, hold, blink)
+  local start = thalamus.clock()
+  local time_blinking = 0.0
+  while true do
+    local elapsed = thalamus.clock() - start
+    local remaining = hold - elapsed + time_blinking
+    if remaining < 0 then
+      break
+    end
+    local blinked = thalamus.wait(function() return not is_held() end, remaining)
+    if not blinked then
+      break
+    end
+
+    local t0 = thalamus.clock()
+    local reacquired = thalamus.wait(is_held, blink)
+    if not reacquired then
+      return false
+    end
+    local t1 = thalamus.clock()
+    time_blinking = time_blinking + t1 - t0
+  end
+  return true
+end
+
+function test()
+  print(1)
+  coroutine.yield(thalamus.sleep(1.0))
+  print(1)
+  coroutine.yield(thalamus.sleep(1.0))
+  print(1)
+  coroutine.yield(thalamus.sleep(1.0))
+
+  local sleep = thalamus.sleep(1.0) 
+  coroutine.yield(function()
+    return sleep and true
+  end)
+  print(1)
+end
+
 local Context = {}
 Context.__index = Context
 
@@ -36,12 +90,10 @@ end
 
 function make_task(config)
   local context = Context.new(config)
-  print('context')
-  print(context)
-  local q = getmetatable(context)
-  print(q)
   local task_type = config.task_type
+  local task = nil
   if task_type == 'simple' then
-    return SimpleTask.new(context)
+    task = function() return SimpleTask.run(context) end
   end
+  return task, context
 end

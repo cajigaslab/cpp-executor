@@ -174,7 +174,7 @@ void SimpleTask::touch(int x, int y) {
 void SimpleTask::gaze(int x, int y) {
   return impl->gaze(x, y);
 }
-void SimpleTask::update() {
+void SimpleTask::update(std::unique_lock<std::mutex>& lock) {
   return impl->update();
 }
 void SimpleTask::draw(SkCanvas* canvas, View view) {

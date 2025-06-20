@@ -88,6 +88,8 @@ add_executable(cpp_executor
   src/simple_task.hpp
   src/lua_task.cpp
   src/lua_task.hpp
+  src/lua_coroutine_task.cpp
+  src/lua_coroutine_task.hpp
   src/hold_state_machine.cpp
   src/hold_state_machine.hpp
   src/state.cpp

@@ -195,6 +195,7 @@ public:
       return;
     }
     boost::asio::post(io_context, [&,c_in=std::move(in)] {
+      std::cout << "POST" << std::endl;
       callback(c_in);
     });
     grpc::ClientReadReactor<T>::StartRead(&in);
@@ -456,6 +457,80 @@ static int lualog(lua_State* L) {
   return 0;
 }
 
+static int lua_clock(lua_State* L) {
+  auto count = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  auto seconds = count/1e9;
+  lua_pushnumber(L, seconds);
+  return 1;
+}
+
+//std::list<boost::asio::steady_timer> lua_timers;
+static boost::asio::io_context* lua_io_context;
+static boost::asio::steady_timer* timer;
+
+static int sleep_continuation(lua_State* L, int status, lua_KContext ctx) {
+  auto timer = reinterpret_cast<boost::asio::steady_timer*>(ctx);
+  delete timer;
+  return 0;
+}
+
+static int sleep_helper(lua_State* L) {
+  auto duration = 1000000000;// int64_t(1e9 * lua_tonumber(L, lua_upvalueindex(1)));
+  //lua_timers.emplace_back(*lua_io_context);
+  //auto timer = lua_timers.end()-1;
+  //timer->expires_after(std::chrono::nanoseconds(duration));
+  //timer->async_wait(sleep_yieler);
+  auto done = false;
+  //std::cout << "C++1" << std::endl;
+  timer->expires_after(std::chrono::nanoseconds(duration));
+  timer->async_wait([&] (const boost::system::error_code& ec) {
+    if(ec) {
+      std::cerr << ec.message() << std::endl;
+      return;
+    }
+    //std::cout << "C++2" << std::endl;
+    done = true;
+  });
+  while (!done) {
+    lua_io_context->run_one();
+    if (lua_io_context->stopped()) {
+      lua_io_context->restart();
+    }
+  }
+  return 0;
+}
+
+static int lua_sleep_is_done(lua_State* L) {
+  auto i = lua_upvalueindex(1);
+  lua_getfield(L, i, "done");
+  return 1;
+}
+
+static int lua_sleep(lua_State* L) {
+  auto duration = std::chrono::nanoseconds(int64_t(1e9 * luaL_checknumber(L, -1)));
+
+  lua_newtable(L);
+  lua_pushboolean(L, false);
+  lua_setfield(L, -2, "done");
+  lua_pushvalue(L, -1);
+
+  auto ref = luaL_ref(L, LUA_REGISTRYINDEX);
+
+  auto timer = new boost::asio::steady_timer(*lua_io_context);
+  timer->expires_after(duration);
+  timer->async_wait([L,ref,timer] (const boost::system::error_code& ec) {
+    lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
+    lua_pushboolean(L, true);
+    lua_setfield(L, -2, "done");
+    luaL_unref(L, LUA_REGISTRYINDEX, ref);
+    lua_pop(L, 1);
+    delete timer;
+  });
+
+  lua_pushcclosure(L, lua_sleep_is_done, 1);
+  return 1;
+}
+
 static double get_double(const thalamus::ObservableCollection::Value& value) {
   if (std::holds_alternative<double>(value)) {
     return std::get<double>(value);
@@ -463,7 +538,56 @@ static double get_double(const thalamus::ObservableCollection::Value& value) {
   return double(std::get<long long>(value));
 }
 
+class CoroutineDriver {
+public:
+  boost::asio::io_context& io_context;
+
+  CoroutineDriver(boost::asio::io_context& io_context) : io_context(io_context) {}
+
+  void operator()(lua_State* t) {
+    boost::asio::executor_work_guard<decltype(io_context.get_executor())> work{ io_context.get_executor() };
+
+    auto status = LUA_YIELD;
+    while (status == LUA_YIELD) {
+      int nres;
+      status = lua_resume(t, nullptr, 0, &nres);
+      if (status == LUA_ERRRUN) {
+        auto errtext = lua_tostring(t, -1);
+        std::cerr << errtext << std::endl;
+      }
+      else if (status == LUA_OK) {
+        return;
+      }
+
+      auto do_continue = false;
+      while (!do_continue) {
+        auto z = lua_gettop(t);
+        lua_pushvalue(t, -1);
+        auto status = lua_pcall(t, 0, 1, 0);
+        if (status != LUA_OK) {
+          auto msg = lua_tostring(t, -1);
+          std::cerr << msg << std::endl;
+          std::abort();
+        }
+        do_continue = lua_toboolean(t, -1);
+        lua_pop(t, 1);
+        if (!do_continue) {
+          io_context.run_one();
+        }
+      }
+      lua_pop(t, nres);
+    }
+  }
+};
+
 static void gl_example(int width, int height, task_controller_grpc::TaskController::Stub& stub, thalamus_grpc::Thalamus::Stub& thalamus_stub) {
+  boost::asio::io_context io_context;
+  boost::asio::io_context logic_io_context;
+  lua_io_context = &logic_io_context;
+  timer = new boost::asio::steady_timer(*lua_io_context);
+  boost::asio::io_context operator_io_context;
+  //boost::optional<boost::asio::io_service::work> m_active = boost::asio::io_service::work(io_context);
+  
   auto L = luaL_newstate();
   proj_assert(L, "Failed to allocate Lua State");
   luaL_openlibs(L);
@@ -491,19 +615,27 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
   lua_pushcfunction(L, luaopen_font);
   lua_setfield(L, -2, "font");
 
+  lua_newtable(L);
+  lua_pushcfunction(L, lua_sleep);
+  lua_setfield(L, -2, "sleep");
   lua_pushcfunction(L, lualog);
-  lua_setglobal(L, "thalamus_log");
+  lua_setfield(L, -2, "log");
+  lua_pushcfunction(L, lua_clock);
+  lua_setfield(L, -2, "clock");
+
+  lua_setglobal(L, "thalamus");
 
   auto err = luaL_dofile(L, "lua/main.lua");
-  if(err) {
+  if (err) {
     auto err_str = luaL_tolstring(L, -1, nullptr);
     std::cerr << err_str << std::endl;
     std::abort();
   }
-
-  boost::asio::io_context io_context;
-  boost::asio::io_context logic_io_context;
-  //boost::optional<boost::asio::io_service::work> m_active = boost::asio::io_service::work(io_context);
+  //auto t = lua_newthread(L);
+  //lua_getglobal(t, "test");
+  //CoroutineDriver driver(logic_io_context);
+  //driver(t);
+  //return;
 
   Context context;
 
@@ -739,6 +871,7 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
   auto stop = [&] {
     io_context.stop();
     logic_io_context.stop();
+    operator_io_context.stop();
   };
 
   boost::asio::steady_timer window_timer(io_context);
@@ -759,6 +892,7 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
         break;
       case SDL_EVENT_WINDOW_RESIZED:
         if (event.window.windowID == SDL_GetWindowID(mainwindow)) {
+          std::lock_guard<std::mutex> lock(mutex);
           main_window.rebuild(event.window.data1, event.window.data2);
           success = SDL_GL_MakeCurrent(operatorwindow, operatorcontext);
           proj_assert(success, "SDL_GL_MakeCurrent failed");
@@ -773,36 +907,44 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
         break;
       case SDL_EVENT_MOUSE_MOTION:
         if(event.motion.windowID == SDL_GetWindowID(mainwindow)) {
-          std::lock_guard<std::mutex> lock(mutex);
-          if(task) {
-            if(event.motion.state & SDL_BUTTON_LMASK) {
-              task->touch(int(event.motion.x), int(event.motion.y));
-            } 
-            if (event.motion.state & SDL_BUTTON_RMASK) {
-              task->gaze(int(event.motion.x), int(event.motion.y));
+          boost::asio::post(logic_io_context, [&task = task,&mutex=mutex, x = int(event.motion.x), y = int(event.motion.y), state= event.motion.state] {
+            std::lock_guard<std::mutex> lock(mutex);
+            if(task) {
+              if(state & SDL_BUTTON_LMASK) {
+                task->touch(x, y);
+              } 
+              if (state & SDL_BUTTON_RMASK) {
+                task->gaze(x, y);
+              }
             }
-          }
+          });
         }
         break;
       case SDL_EVENT_MOUSE_BUTTON_DOWN:
         if(event.button.windowID == SDL_GetWindowID(mainwindow)) {
-          std::lock_guard<std::mutex> lock(mutex);
-          if(task) {
-            if(event.button.button == SDL_BUTTON_LEFT) {
-              task->touch(int(event.button.x), int(event.button.y));
-            } 
-            if (event.button.button == SDL_BUTTON_RIGHT) {
-              task->gaze(int(event.button.x), int(event.button.y));
+          boost::asio::post(logic_io_context, [&task = task,&mutex=mutex, x = int(event.button.x), y = int(event.button.y), button= event.button.button] {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (task) {
+              if (button == SDL_BUTTON_LEFT) {
+                task->touch(x, y);
+              }
+              if (button == SDL_BUTTON_RIGHT) {
+                task->gaze(x, y);
+              }
             }
-          }
+          });
         }
         break;
       case SDL_EVENT_MOUSE_BUTTON_UP:
         if(event.button.windowID == SDL_GetWindowID(mainwindow)) {
-          std::lock_guard<std::mutex> lock(mutex);
-          if(task && event.button.button == SDL_BUTTON_LEFT) {
-            task->touch(-1, -1);
-          } 
+          boost::asio::post(logic_io_context, [&task = task,&mutex=mutex, button = event.button.button] {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (task) {
+              if (button == SDL_BUTTON_LEFT) {
+                task->touch(-1, -1);
+              }
+            }
+          });
         }
         break;
       case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
@@ -840,7 +982,24 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
         task->draw(main_window.gpuCanvas, View::SUBJECT);
       }
       main_window.context->flush();
+    }
+    SDL_GL_SwapWindow(mainwindow);
 
+    window_timer.expires_after(4ms);
+    window_timer.async_wait(update_window);
+  };
+  window_timer.expires_after(4ms);
+  window_timer.async_wait(update_window);
+
+  boost::asio::steady_timer operator_timer(operator_io_context);
+  std::function<void(const boost::system::error_code&)> update_operator = [&] (const boost::system::error_code& ec) {
+    if(ec) {
+      std::cerr << ec.message() << std::endl;
+      return;
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(mutex);
       success = SDL_GL_MakeCurrent(operatorwindow, operatorcontext);
       operator_window.gl_face->fFunctions.fBindFramebuffer(GR_GL_FRAMEBUFFER, frameBuffer.buffer);
       //glerr = operator_window.gl_face->fFunctions.fGetError();
@@ -887,16 +1046,13 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
         }
       }
     }
-    success = SDL_GL_MakeCurrent(mainwindow, maincontext);
-    SDL_GL_SwapWindow(mainwindow);
-    success = SDL_GL_MakeCurrent(operatorwindow, operatorcontext);
     SDL_GL_SwapWindow(operatorwindow);
 
-    window_timer.expires_after(4ms);
-    window_timer.async_wait(update_window);
+    operator_timer.expires_after(4ms);
+    operator_timer.async_wait(update_operator);
   };
-  window_timer.expires_after(4ms);
-  window_timer.async_wait(update_window);
+  operator_timer.expires_after(4ms);
+  operator_timer.async_wait(update_operator);
 
   boost::asio::steady_timer logic_timer(logic_io_context);
   std::function<void(const boost::system::error_code&)> update_logic = [&] (const boost::system::error_code& ec) {
@@ -905,9 +1061,9 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
       return;
     }
 
-    std::lock_guard<std::mutex> lock(mutex);
+    std::unique_lock<std::mutex> lock(mutex);
     if(task) {
-      task->update();
+      task->update(lock);
       auto status = task->status();
       if(status.has_value()) {
         std::cout << "Respond" << std::endl;
@@ -921,7 +1077,7 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
         std::stringstream stream(task_config->body());
         stream >> context.config;
         std::cout << context.config;
-        task.reset(make_task(context, L));
+        task.reset(make_task(logic_io_context, context, L));
       }
     }
 
@@ -936,10 +1092,14 @@ static void gl_example(int width, int height, task_controller_grpc::TaskControll
   std::thread update_thread([&] {
     logic_io_context.run();
   });
+  std::thread operator_thread([&] {
+    operator_io_context.run();
+  });
   io_context.run();
-
   update_thread.join();
-  
+  operator_thread.join();
+  task.reset();
+
   lua_close(L);
   success = SDL_GL_MakeCurrent(operatorwindow, operatorcontext);
   frameBuffer.clear();

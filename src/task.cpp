@@ -1,6 +1,7 @@
 #include <task.hpp>
 #include <simple_task.hpp>
 #include <lua_task.hpp>
+#include <lua_coroutine_task.hpp>
 
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -63,17 +64,22 @@ static void json_to_lua(lua_State* L, const Json::Value& json) {
   }
 }
 
-Task* make_task(Context& context, lua_State* L) {
+Task* make_task(boost::asio::io_context& io_context, Context& context, lua_State* L) {
   lua_getglobal(L, "make_task");
   auto v = lua_isnil(L, -1);
   json_to_lua(L, context.config);
-  auto err = lua_pcall(L, 1, 1, 0);
+  auto err = lua_pcall(L, 1, 2, 0);
   if(err) {
     auto err_str = luaL_tolstring(L, -1, nullptr);
     std::cerr << err_str << std::endl;
     std::abort();
-  } else if(lua_type(L, -1) != LUA_TNIL) {
+  } else if(lua_type(L, -2) != LUA_TNIL) {
+    if(lua_isfunction(L, -2)) {
+      return new LuaCoroutineTask(io_context, L);
+    }
+    lua_pop(L, 1);
     auto ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    lua_pop(L, 1);
     return new LuaTask(L, ref);
   }
 

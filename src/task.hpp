@@ -12,6 +12,8 @@
 #include "include/core/SkColor.h"
 #include "include/core/SkCanvas.h"
 
+#include "boost/asio.hpp"
+
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
@@ -39,9 +41,9 @@ public:
   virtual ~Task() {}
   virtual void touch(int x, int y) = 0;
   virtual void gaze(int x, int y) = 0;
-  virtual void update() = 0;
+  virtual void update(std::unique_lock<std::mutex>&) = 0;
   virtual void draw(SkCanvas* canvas, View view) = 0;
   virtual std::optional<task_controller_grpc::TaskResult> status() = 0;
 };
 
-Task* make_task(Context& context, lua_State*);
+Task* make_task(boost::asio::io_context& io_context, Context& context, lua_State*);

@@ -46,6 +46,11 @@ struct LuaTask::Impl {
     }
     lua_pop(L, 1);
   }
+  ~Impl() {
+    luaL_unref(L, LUA_REGISTRYINDEX, ref);
+    luaL_unref(L, LUA_REGISTRYINDEX, subject_canvas_ref);
+    luaL_unref(L, LUA_REGISTRYINDEX, operator_canvas_ref);
+  }
   void gaze(int x, int y) {
     lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
     lua_getfield(L, -1, "gaze");
@@ -134,7 +139,7 @@ void LuaTask::touch(int x, int y) {
 void LuaTask::gaze(int x, int y) {
   return impl->gaze(x, y);
 }
-void LuaTask::update() {
+void LuaTask::update(std::unique_lock<std::mutex>& lock) {
   return impl->update();
 }
 void LuaTask::draw(SkCanvas* canvas, View view) {
