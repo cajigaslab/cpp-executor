@@ -19,11 +19,11 @@ extern "C" {
 struct LuaCoroutineTask::Impl {
   boost::asio::io_context& io_context;
   lua_State* L;
-  lua_State* coroutine;
   int on_gaze_ref = LUA_NOREF;
   int on_touch_ref = LUA_NOREF;
   int renderer_ref = LUA_NOREF;
   int context_ref = LUA_NOREF;
+  int coroutine_ref = LUA_NOREF;
   int subject_canvas_ref = LUA_NOREF;
   int operator_canvas_ref = LUA_NOREF;
   SkCanvas* subject_canvas = nullptr;
@@ -31,13 +31,11 @@ struct LuaCoroutineTask::Impl {
   std::optional<task_controller_grpc::TaskResult> _status;
   Impl(boost::asio::io_context& io_context, lua_State* _l) : io_context(io_context), L(_l) {
     context_ref = luaL_ref(L, LUA_REGISTRYINDEX);
-
-    lua_setglobal(L, "thalamus_coroutine_task");
-    coroutine = lua_newthread(L);
-    lua_getglobal(coroutine, "thalamus_coroutine_task");
+    coroutine_ref = luaL_ref(L, LUA_REGISTRYINDEX);
   }
   ~Impl() {
     luaL_unref(L, LUA_REGISTRYINDEX, context_ref);
+    luaL_unref(L, LUA_REGISTRYINDEX, coroutine_ref);
   }
   void touch(int x, int y) {
     lua_rawgeti(L, LUA_REGISTRYINDEX, context_ref);
@@ -72,6 +70,8 @@ struct LuaCoroutineTask::Impl {
     lua_pop(L, 1);
   }
   void update(std::unique_lock<std::mutex>& lock) { 
+    lua_rawgeti(L, LUA_REGISTRYINDEX, coroutine_ref);
+    auto coroutine = lua_tothread(L, -1);
     auto status = LUA_YIELD;
     while (status == LUA_YIELD) {
       int nres;

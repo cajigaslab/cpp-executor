@@ -76,7 +76,7 @@ Task* make_task(boost::asio::io_context& io_context, Context& context, lua_State
     std::cerr << err_str << std::endl;
     std::abort();
   } else if(lua_type(L, -2) != LUA_TNIL) {
-    if(lua_isfunction(L, -2)) {
+    if(lua_isthread(L, -2)) {
       return new LuaCoroutineTask(io_context, L);
     }
     lua_pop(L, 1);

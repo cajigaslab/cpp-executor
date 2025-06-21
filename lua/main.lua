@@ -93,7 +93,7 @@ function make_task(config)
   local task_type = config.task_type
   local task = nil
   if task_type == 'simple' then
-    task = function() return SimpleTask.run(context) end
+    task = coroutine.create(function() return SimpleTask.run(context) end)
   end
   return task, context
 end
